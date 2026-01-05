@@ -347,7 +347,7 @@ class ProjectLoader:
         self._loaded_projects: Dict[str, Project] = {}
 
     def list_shows(self) -> List[Dict[str, Any]]:
-        """List all available shows"""
+        """List all available shows with import timestamps"""
         shows = []
 
         for item in self.shows_path.iterdir():
@@ -358,32 +358,74 @@ class ProjectLoader:
                         with open(project_file, 'r') as f:
                             data = json.load(f)
 
+                        # Get import timestamp from metadata file or folder mtime
+                        imported_at = self._get_import_timestamp(item)
+
                         shows.append({
                             "id": self._generate_show_id(item.name),
                             "name": data.get("name", item.name),
                             "description": data.get("description", ""),
                             "author": data.get("author", ""),
                             "path": str(item),
+                            "folder_name": item.name,
                             "duration_ms": self._get_project_duration(data),
                             "size_mb": self._get_folder_size_mb(item),
                             "created": data.get("created", ""),
                             "modified": data.get("modified", ""),
+                            "imported_at": imported_at,
                         })
                     except Exception as e:
                         logger.warning(f"Error reading project {item.name}: {e}")
 
             elif item.suffix == ".zip":
                 # Unextracted zip file
+                stat = item.stat()
                 shows.append({
                     "id": self._generate_show_id(item.stem),
                     "name": item.stem,
                     "description": "",
                     "path": str(item),
-                    "size_mb": round(item.stat().st_size / (1024 * 1024), 2),
+                    "folder_name": item.stem,
+                    "size_mb": round(stat.st_size / (1024 * 1024), 2),
                     "is_zip": True,
+                    "imported_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
                 })
 
+        # Sort by import date (most recent first)
+        shows.sort(key=lambda x: x.get("imported_at", ""), reverse=True)
+
         return shows
+
+    def _get_import_timestamp(self, project_path: Path) -> str:
+        """Get import timestamp for a project
+
+        First checks for .import_meta file, then falls back to folder mtime.
+        """
+        meta_file = project_path / ".import_meta"
+        if meta_file.exists():
+            try:
+                with open(meta_file, 'r') as f:
+                    meta = json.load(f)
+                    return meta.get("imported_at", "")
+            except Exception:
+                pass
+
+        # Fallback to folder modification time
+        stat = project_path.stat()
+        return datetime.fromtimestamp(stat.st_mtime).isoformat()
+
+    def _save_import_metadata(self, project_path: Path, source_zip: Optional[Path] = None):
+        """Save import metadata for a project"""
+        meta_file = project_path / ".import_meta"
+        meta = {
+            "imported_at": datetime.now().isoformat(),
+            "source_zip": str(source_zip) if source_zip else None,
+        }
+        try:
+            with open(meta_file, 'w') as f:
+                json.dump(meta, f, indent=2)
+        except Exception as e:
+            logger.warning(f"Failed to save import metadata: {e}")
 
     def _generate_show_id(self, name: str) -> str:
         """Generate a unique show ID from name"""
@@ -404,12 +446,14 @@ class ProjectLoader:
                 total += item.stat().st_size
         return round(total / (1024 * 1024), 2)
 
-    def import_show(self, zip_path: Path, show_name: Optional[str] = None) -> str:
+    def import_show(self, zip_path: Path, show_name: Optional[str] = None,
+                    delete_zip_after: bool = False) -> str:
         """Import a show from a zip file
 
         Args:
             zip_path: Path to the zip file
             show_name: Optional name for the show folder
+            delete_zip_after: If True, delete the zip file after successful import
 
         Returns:
             Show ID
@@ -452,8 +496,19 @@ class ProjectLoader:
             shutil.rmtree(extract_path)
             raise InvalidProjectError("No project.json found in package")
 
+        # Save import metadata (timestamp and source zip path)
+        self._save_import_metadata(extract_path, zip_path)
+
         show_id = self._generate_show_id(folder_name)
         logger.info(f"Show imported: {folder_name} (ID: {show_id})")
+
+        # Optionally delete source zip
+        if delete_zip_after:
+            try:
+                zip_path.unlink()
+                logger.info(f"Deleted source zip: {zip_path}")
+            except Exception as e:
+                logger.warning(f"Failed to delete source zip: {e}")
 
         return show_id
 
@@ -792,23 +847,79 @@ class ProjectLoader:
 
         return scenes
 
-    def delete_show(self, show_id: str) -> bool:
-        """Delete a show
+    def delete_show(self, show_id: str, delete_source_zip: bool = True) -> bool:
+        """Delete a show and optionally its source zip file
 
         Args:
             show_id: Show ID to delete
+            delete_source_zip: If True, also delete the source zip file
 
         Returns:
             True if deleted successfully
         """
+        deleted = False
+        folder_name = None
+
+        # Find and delete the project folder
         for item in self.shows_path.iterdir():
             if item.is_dir():
                 if self._generate_show_id(item.name) == show_id:
+                    folder_name = item.name
+
+                    # Try to get source zip path from metadata
+                    source_zip = None
+                    if delete_source_zip:
+                        meta_file = item / ".import_meta"
+                        if meta_file.exists():
+                            try:
+                                with open(meta_file, 'r') as f:
+                                    meta = json.load(f)
+                                    source_zip = meta.get("source_zip")
+                            except Exception:
+                                pass
+
+                    # Delete the project folder
                     shutil.rmtree(item)
                     logger.info(f"Show deleted: {item.name}")
-                    return True
+                    deleted = True
 
-        return False
+                    # Delete source zip if found
+                    if source_zip:
+                        source_zip_path = Path(source_zip)
+                        if source_zip_path.exists():
+                            try:
+                                source_zip_path.unlink()
+                                logger.info(f"Source zip deleted: {source_zip_path}")
+                            except Exception as e:
+                                logger.warning(f"Failed to delete source zip: {e}")
+                    break
+
+        # Also look for zip files with matching name in shows folder and common locations
+        if folder_name:
+            zip_locations = [
+                self.shows_path / f"{folder_name}.zip",
+                self.shows_path.parent / "datas" / f"{folder_name}.zip",
+                Path("/tmp") / f"{folder_name}.zip",
+            ]
+
+            for zip_path in zip_locations:
+                if zip_path.exists():
+                    try:
+                        zip_path.unlink()
+                        logger.info(f"Associated zip deleted: {zip_path}")
+                    except Exception as e:
+                        logger.warning(f"Failed to delete zip {zip_path}: {e}")
+
+        # Also check for unextracted zip files in shows folder
+        if not deleted:
+            for item in self.shows_path.iterdir():
+                if item.suffix == ".zip":
+                    if self._generate_show_id(item.stem) == show_id:
+                        item.unlink()
+                        logger.info(f"Show zip deleted: {item.name}")
+                        return True
+
+        return deleted
 
     def get_loaded_project(self, project_id: str) -> Optional[Project]:
         """Get a loaded project by ID"""

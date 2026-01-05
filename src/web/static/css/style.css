@@ -256,13 +256,24 @@ body {
     filter: drop-shadow(0 0 2px rgba(245, 158, 11, 0.5));
 }
 
-.badge.deformed {
+.badge.deformed,
+.badge.badge-warning {
     background: #f59e0b;
     color: white;
     padding: 0.15rem 0.4rem;
     border-radius: 3px;
     font-size: 0.7rem;
     font-weight: 500;
+}
+
+.import-date {
+    color: var(--text-secondary);
+    font-size: 0.8rem;
+}
+
+.show-card.is-zip {
+    opacity: 0.7;
+    border-style: dashed;
 }
 
 .preview-controls {

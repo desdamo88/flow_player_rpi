@@ -148,6 +148,12 @@ sudo systemctl status flow-player   # État
 journalctl -u flow-player -f        # Logs en direct
 ```
 
+## Roadmap
+
+Voir [ROADMAP.md](ROADMAP.md) pour le statut détaillé des fonctionnalités.
+
+**Statut actuel**: v0.9.0 Beta - Prêt pour tests sur RPi 5
+
 ## Licence
 
 MIT
