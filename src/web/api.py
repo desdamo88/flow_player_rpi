@@ -305,22 +305,39 @@ def create_api_blueprint() -> Blueprint:
 
     # ==================== MEDIA ====================
 
-    @api.route('/media/<media_id>', methods=['GET'])
+    @api.route('/media/<path:media_id>', methods=['GET'])
     @require_player
     def serve_media(media_id):
-        """Serve a media file by ID"""
+        """Serve a media file by ID or path
+
+        Handles both:
+        - Media ID: e.g., "f4233c8c-e41e-4c9b-b2b7-3436d2c784de"
+        - Direct path: e.g., "media/videos/xxx.mp4"
+        """
         player = get_player()
 
         try:
             if not player.current_project:
                 return api_response(False, error="No project loaded", status_code=404)
 
-            media = player.current_project.get_media(media_id)
-            if not media:
+            file_path = None
+
+            # Check if media_id is a path (contains / or starts with media)
+            if '/' in media_id or media_id.startswith('media'):
+                # Direct path - resolve from project base
+                file_path = player.current_project.base_path / media_id
+            else:
+                # Media ID - look up in media list
+                media = player.current_project.get_media(media_id)
+                if media:
+                    file_path = media.path
+
+            if not file_path:
                 return api_response(False, error="Media not found", status_code=404)
 
-            if not media.path.exists():
-                return api_response(False, error="Media file not found", status_code=404)
+            if not file_path.exists():
+                logger.error(f"Media file not found: {file_path}")
+                return api_response(False, error=f"Media file not found: {file_path}", status_code=404)
 
             # Determine mime type
             mime_types = {
@@ -336,10 +353,10 @@ def create_api_blueprint() -> Blueprint:
                 '.png': 'image/png',
                 '.gif': 'image/gif',
             }
-            ext = media.path.suffix.lower()
+            ext = file_path.suffix.lower()
             mime_type = mime_types.get(ext, 'application/octet-stream')
 
-            return send_file(media.path, mimetype=mime_type)
+            return send_file(file_path, mimetype=mime_type)
         except Exception as e:
             logger.error(f"Serve media error: {e}")
             return api_response(False, error=str(e), status_code=500)
