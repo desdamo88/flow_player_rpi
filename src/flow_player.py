@@ -303,9 +303,12 @@ class FlowPlayer:
                         'name': elem.name
                     })
 
-            # Check for video mapping
-            has_mapping = (self.current_project.video_mapping is not None and
-                          self.current_project.video_mapping.enabled)
+            # Check for video mapping (scene-specific or global)
+            scene_mapping = self.current_project.get_scene_mapping(scene.id)
+            has_mapping = scene_mapping is not None and scene_mapping.enabled
+            mapping_info = None
+            if scene_mapping:
+                mapping_info = scene_mapping.to_dict()
 
             scenes.append({
                 "id": scene.id,
@@ -321,6 +324,7 @@ class FlowPlayer:
                 "unsupported_elements": unsupported_elements,
                 "has_warnings": len(interactive_elements) > 0 or len(unsupported_elements) > 0,
                 "has_mapping": has_mapping,
+                "mapping": mapping_info,
                 "is_current": self.current_scene and self.current_scene.id == scene.id,
             })
 
@@ -331,17 +335,13 @@ class FlowPlayer:
         if not self.current_project:
             return {}
 
+        # Get default/global mapping
         mapping_info = None
         if self.current_project.video_mapping and self.current_project.video_mapping.enabled:
-            vm = self.current_project.video_mapping
-            mapping_info = {
-                "enabled": True,
-                "mode": vm.mode,
-                "top_left": vm.top_left,
-                "top_right": vm.top_right,
-                "bottom_left": vm.bottom_left,
-                "bottom_right": vm.bottom_right,
-            }
+            mapping_info = self.current_project.video_mapping.to_dict()
+
+        # Get all mappings
+        all_mappings = [m.to_dict() for m in self.current_project.video_mappings if m.enabled]
 
         return {
             "id": self.current_project.id,
@@ -352,6 +352,7 @@ class FlowPlayer:
             "media_count": len(self.current_project.media),
             "dmx_sequence_count": len(self.current_project.dmx_sequences),
             "video_mapping": mapping_info,
+            "video_mappings": all_mappings,
             "artnet_config": self.current_project.artnet_config,
         }
 

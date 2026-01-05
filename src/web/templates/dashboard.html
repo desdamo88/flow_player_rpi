@@ -15,12 +15,10 @@
                 </video>
                 <!-- Mapping overlay -->
                 <div id="mapping-overlay" class="mapping-overlay" style="display: none;">
-                    <svg class="mapping-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
-                        <polygon id="mapping-polygon" class="mapping-shape" points="0,0 100,0 100,100 0,100"/>
-                        <circle id="corner-tl" class="mapping-corner" cx="0" cy="0" r="3"/>
-                        <circle id="corner-tr" class="mapping-corner" cx="100" cy="0" r="3"/>
-                        <circle id="corner-bl" class="mapping-corner" cx="0" cy="100" r="3"/>
-                        <circle id="corner-br" class="mapping-corner" cx="100" cy="100" r="3"/>
+                    <svg id="mapping-svg" class="mapping-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
+                        <!-- Will be populated dynamically for mesh or perspective -->
+                        <g id="mapping-shapes"></g>
+                        <g id="mapping-points"></g>
                     </svg>
                 </div>
             </div>
@@ -112,6 +110,7 @@
 <script>
     let currentSceneId = null;
     let currentMapping = null;
+    let scenesData = {};  // Store all scenes data for mapping lookup
     const videoElement = document.getElementById('preview-video');
     const placeholderElement = document.getElementById('preview-placeholder');
     const mappingOverlay = document.getElementById('mapping-overlay');
@@ -135,13 +134,18 @@
                         `${data.project.resolution.width}x${data.project.resolution.height}`;
                 }
 
-                if (data.project.video_mapping && data.project.video_mapping.enabled) {
+                // Check if any scene has mapping
+                const hasAnyMapping = data.project.video_mapping?.enabled ||
+                    (data.project.video_mappings && data.project.video_mappings.length > 0);
+
+                if (hasAnyMapping) {
                     document.getElementById('mapping-badge').style.display = 'inline-block';
+                }
+
+                // Store default mapping
+                if (data.project.video_mapping && data.project.video_mapping.enabled) {
                     currentMapping = data.project.video_mapping;
                     updateMappingVisualization();
-                } else {
-                    currentMapping = null;
-                    document.getElementById('show-mapping').parentElement.style.display = 'none';
                 }
             }
 
@@ -150,7 +154,18 @@
                 return;
             }
 
+            // Store scenes data for later lookup
+            data.scenes.forEach(scene => {
+                scenesData[scene.id] = scene;
+            });
+
             currentSceneId = data.current_scene_id;
+
+            // Update mapping for current scene if any
+            if (currentSceneId && scenesData[currentSceneId]?.mapping) {
+                currentMapping = scenesData[currentSceneId].mapping;
+                updateMappingVisualization();
+            }
 
             container.innerHTML = data.scenes.map(scene => {
                 // Build warnings HTML
@@ -224,6 +239,18 @@
                 indicator.className = 'playing-indicator';
                 indicator.textContent = '▶ En lecture';
                 selectedCard.appendChild(indicator);
+            }
+
+            // Update mapping for this scene
+            const sceneData = scenesData[sceneId];
+            if (sceneData && sceneData.mapping && sceneData.mapping.enabled) {
+                currentMapping = sceneData.mapping;
+                updateMappingVisualization();
+            } else if (!sceneData?.mapping) {
+                // No scene-specific mapping, hide overlay if no global mapping
+                if (!currentMapping) {
+                    document.getElementById('show-mapping').parentElement.style.display = 'none';
+                }
             }
 
             // Load video preview
@@ -358,47 +385,135 @@
 
     // Mapping visualization functions
     function updateMappingVisualization() {
-        if (!currentMapping) {
+        const shapesGroup = document.getElementById('mapping-shapes');
+        const pointsGroup = document.getElementById('mapping-points');
+
+        if (!currentMapping || !currentMapping.enabled) {
             mappingOverlay.style.display = 'none';
             mappingInfo.style.display = 'none';
+            document.getElementById('show-mapping').parentElement.style.display = 'none';
             return;
         }
 
-        // Convert mapping points to SVG coordinates (0-100)
-        const tl = currentMapping.top_left || [0, 0];
-        const tr = currentMapping.top_right || [1, 0];
-        const bl = currentMapping.bottom_left || [0, 1];
-        const br = currentMapping.bottom_right || [1, 1];
+        // Clear previous content
+        shapesGroup.innerHTML = '';
+        pointsGroup.innerHTML = '';
 
-        // Scale to 0-100
-        const points = [
-            `${tl[0] * 100},${tl[1] * 100}`,
-            `${tr[0] * 100},${tr[1] * 100}`,
-            `${br[0] * 100},${br[1] * 100}`,
-            `${bl[0] * 100},${bl[1] * 100}`
-        ].join(' ');
+        const mode = currentMapping.mode || 'perspective';
+        let infoHtml = `<strong>Mode:</strong> ${mode}`;
 
-        document.getElementById('mapping-polygon').setAttribute('points', points);
-        document.getElementById('corner-tl').setAttribute('cx', tl[0] * 100);
-        document.getElementById('corner-tl').setAttribute('cy', tl[1] * 100);
-        document.getElementById('corner-tr').setAttribute('cx', tr[0] * 100);
-        document.getElementById('corner-tr').setAttribute('cy', tr[1] * 100);
-        document.getElementById('corner-bl').setAttribute('cx', bl[0] * 100);
-        document.getElementById('corner-bl').setAttribute('cy', bl[1] * 100);
-        document.getElementById('corner-br').setAttribute('cx', br[0] * 100);
-        document.getElementById('corner-br').setAttribute('cy', br[1] * 100);
+        if (mode === 'mesh' && currentMapping.mesh_grid) {
+            // Render mesh grid
+            const mesh = currentMapping.mesh_grid;
+            const points = mesh.points || [];
+            const rows = mesh.rows || 1;
+            const cols = mesh.cols || 1;
 
-        // Update info text
-        mappingInfo.innerHTML = `
-            <strong>Mode:</strong> ${currentMapping.mode || 'perspective'}<br>
-            <small>TL: (${(tl[0]*100).toFixed(1)}%, ${(tl[1]*100).toFixed(1)}%) |
-            TR: (${(tr[0]*100).toFixed(1)}%, ${(tr[1]*100).toFixed(1)}%)<br>
-            BL: (${(bl[0]*100).toFixed(1)}%, ${(bl[1]*100).toFixed(1)}%) |
-            BR: (${(br[0]*100).toFixed(1)}%, ${(br[1]*100).toFixed(1)}%)</small>
-        `;
+            infoHtml += ` (${rows}x${cols} cellules)`;
+
+            // Draw mesh cells
+            for (let r = 0; r < rows; r++) {
+                for (let c = 0; c < cols; c++) {
+                    if (points[r] && points[r+1]) {
+                        const p1 = points[r][c] || {x: c/cols, y: r/rows};
+                        const p2 = points[r][c+1] || {x: (c+1)/cols, y: r/rows};
+                        const p3 = points[r+1][c+1] || {x: (c+1)/cols, y: (r+1)/rows};
+                        const p4 = points[r+1][c] || {x: c/cols, y: (r+1)/rows};
+
+                        const polygonPoints = [
+                            `${p1.x * 100},${p1.y * 100}`,
+                            `${p2.x * 100},${p2.y * 100}`,
+                            `${p3.x * 100},${p3.y * 100}`,
+                            `${p4.x * 100},${p4.y * 100}`
+                        ].join(' ');
+
+                        const polygon = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+                        polygon.setAttribute('points', polygonPoints);
+                        polygon.setAttribute('class', 'mapping-cell');
+                        shapesGroup.appendChild(polygon);
+                    }
+                }
+            }
+
+            // Draw grid points
+            for (let r = 0; r < points.length; r++) {
+                for (let c = 0; c < (points[r] || []).length; c++) {
+                    const p = points[r][c];
+                    if (p) {
+                        const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                        circle.setAttribute('cx', p.x * 100);
+                        circle.setAttribute('cy', p.y * 100);
+                        circle.setAttribute('r', '2');
+                        circle.setAttribute('class', 'mapping-point');
+
+                        // Check if deformed (not at expected position)
+                        const expectedX = c / cols;
+                        const expectedY = r / rows;
+                        if (Math.abs(p.x - expectedX) > 0.01 || Math.abs(p.y - expectedY) > 0.01) {
+                            circle.setAttribute('class', 'mapping-point deformed');
+                            circle.setAttribute('r', '3');
+                        }
+                        pointsGroup.appendChild(circle);
+                    }
+                }
+            }
+
+            if (currentMapping.is_deformed) {
+                infoHtml += ' <span class="badge deformed">Déformé</span>';
+            }
+
+        } else {
+            // Render perspective (4 corners)
+            const pp = currentMapping.perspective_points || {};
+            const tl = pp.top_left || {x: 0, y: 0};
+            const tr = pp.top_right || {x: 1, y: 0};
+            const bl = pp.bottom_left || {x: 0, y: 1};
+            const br = pp.bottom_right || {x: 1, y: 1};
+
+            const polygonPoints = [
+                `${tl.x * 100},${tl.y * 100}`,
+                `${tr.x * 100},${tr.y * 100}`,
+                `${br.x * 100},${br.y * 100}`,
+                `${bl.x * 100},${bl.y * 100}`
+            ].join(' ');
+
+            const polygon = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+            polygon.setAttribute('points', polygonPoints);
+            polygon.setAttribute('class', 'mapping-shape');
+            shapesGroup.appendChild(polygon);
+
+            // Draw corner points
+            const corners = [
+                {p: tl, label: 'TL'},
+                {p: tr, label: 'TR'},
+                {p: bl, label: 'BL'},
+                {p: br, label: 'BR'}
+            ];
+
+            corners.forEach(c => {
+                const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                circle.setAttribute('cx', c.p.x * 100);
+                circle.setAttribute('cy', c.p.y * 100);
+                circle.setAttribute('r', '3');
+                circle.setAttribute('class', 'mapping-corner');
+                pointsGroup.appendChild(circle);
+            });
+
+            infoHtml += `<br><small>
+                TL: (${(tl.x*100).toFixed(1)}%, ${(tl.y*100).toFixed(1)}%) |
+                TR: (${(tr.x*100).toFixed(1)}%, ${(tr.y*100).toFixed(1)}%)<br>
+                BL: (${(bl.x*100).toFixed(1)}%, ${(bl.y*100).toFixed(1)}%) |
+                BR: (${(br.x*100).toFixed(1)}%, ${(br.y*100).toFixed(1)}%)
+            </small>`;
+        }
+
+        if (currentMapping.target_resolution) {
+            const res = currentMapping.target_resolution;
+            infoHtml += `<br><small>Cible: ${res.width}x${res.height}</small>`;
+        }
+
+        mappingInfo.innerHTML = infoHtml;
         mappingInfo.style.display = 'block';
-
-        // Show toggle if mapping exists
         document.getElementById('show-mapping').parentElement.style.display = 'flex';
     }
 

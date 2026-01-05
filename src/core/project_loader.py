@@ -64,15 +64,98 @@ class Scene:
 
 
 @dataclass
+class MeshGrid:
+    """Mesh grid for advanced warping"""
+    rows: int = 1
+    cols: int = 1
+    points: List[List[Dict[str, float]]] = field(default_factory=list)
+
+    def get_point(self, row: int, col: int) -> Dict[str, float]:
+        """Get a specific grid point"""
+        if 0 <= row < len(self.points) and 0 <= col < len(self.points[row]):
+            return self.points[row][col]
+        return {"x": col / self.cols, "y": row / self.rows}
+
+    def is_deformed(self) -> bool:
+        """Check if the mesh has any deformation"""
+        for row_idx, row in enumerate(self.points):
+            for col_idx, point in enumerate(row):
+                expected_x = col_idx / self.cols if self.cols > 0 else 0
+                expected_y = row_idx / self.rows if self.rows > 0 else 0
+                if abs(point.get("x", 0) - expected_x) > 0.001 or abs(point.get("y", 0) - expected_y) > 0.001:
+                    return True
+        return False
+
+
+@dataclass
 class VideoMappingConfig:
-    """Video mapping configuration"""
+    """Video mapping configuration - supports perspective and mesh warping"""
     enabled: bool = False
-    mode: str = "perspective"
+    mode: str = "perspective"  # "perspective" or "mesh"
+
+    # Perspective mode (4 corners)
     top_left: tuple = (0.0, 0.0)
     top_right: tuple = (1.0, 0.0)
     bottom_left: tuple = (0.0, 1.0)
     bottom_right: tuple = (1.0, 1.0)
+
+    # Mesh mode (grid warping)
+    mesh_grid: Optional[MeshGrid] = None
+
+    # Common settings
     background_color: str = "#000000"
+    target_resolution: Optional[Dict[str, int]] = None
+    source_resolution: Optional[Dict[str, int]] = None
+
+    # Linked scene (from displayConfig)
+    scene_id: Optional[str] = None
+
+    def is_deformed(self) -> bool:
+        """Check if mapping has any actual deformation"""
+        if not self.enabled:
+            return False
+
+        if self.mode == "mesh" and self.mesh_grid:
+            return self.mesh_grid.is_deformed()
+
+        # Check perspective deformation
+        default_corners = [(0, 0), (1, 0), (0, 1), (1, 1)]
+        actual_corners = [self.top_left, self.top_right, self.bottom_left, self.bottom_right]
+        for default, actual in zip(default_corners, actual_corners):
+            if abs(default[0] - actual[0]) > 0.001 or abs(default[1] - actual[1]) > 0.001:
+                return True
+        return False
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for API responses"""
+        result = {
+            "enabled": self.enabled,
+            "mode": self.mode,
+            "background_color": self.background_color,
+            "is_deformed": self.is_deformed(),
+            "scene_id": self.scene_id,
+        }
+
+        if self.mode == "perspective":
+            result["perspective_points"] = {
+                "top_left": {"x": self.top_left[0], "y": self.top_left[1]},
+                "top_right": {"x": self.top_right[0], "y": self.top_right[1]},
+                "bottom_left": {"x": self.bottom_left[0], "y": self.bottom_left[1]},
+                "bottom_right": {"x": self.bottom_right[0], "y": self.bottom_right[1]},
+            }
+        elif self.mode == "mesh" and self.mesh_grid:
+            result["mesh_grid"] = {
+                "rows": self.mesh_grid.rows,
+                "cols": self.mesh_grid.cols,
+                "points": self.mesh_grid.points,
+            }
+
+        if self.target_resolution:
+            result["target_resolution"] = self.target_resolution
+        if self.source_resolution:
+            result["source_resolution"] = self.source_resolution
+
+        return result
 
 
 @dataclass
@@ -121,7 +204,8 @@ class Project:
 
     # Configuration
     artnet_config: Dict[str, Any] = field(default_factory=dict)
-    video_mapping: Optional[VideoMappingConfig] = None
+    video_mapping: Optional[VideoMappingConfig] = None  # Default/global mapping
+    video_mappings: List[VideoMappingConfig] = field(default_factory=list)  # Per-scene mappings
     standalone_scenes: List[StandaloneSceneSlot] = field(default_factory=list)
     display_config: List[Dict[str, Any]] = field(default_factory=list)
 
@@ -186,6 +270,23 @@ class Project:
         """
         if scene.linked_lighting_sequence_id:
             return self.get_dmx_sequence(scene.linked_lighting_sequence_id)
+        return None
+
+    def get_scene_mapping(self, scene_id: str) -> Optional[VideoMappingConfig]:
+        """Get the video mapping configuration for a specific scene
+
+        Looks up mapping by scene_id in video_mappings list,
+        falls back to global video_mapping if no scene-specific mapping.
+        """
+        # First check scene-specific mappings
+        for mapping in self.video_mappings:
+            if mapping.scene_id == scene_id and mapping.enabled:
+                return mapping
+
+        # Fall back to global mapping
+        if self.video_mapping and self.video_mapping.enabled:
+            return self.video_mapping
+
         return None
 
     def get_scene_media(self, scene: Scene) -> List[Dict[str, Any]]:
@@ -491,39 +592,79 @@ class ProjectLoader:
             if not project.start_scene_id and project.scenes:
                 project.start_scene_id = project.scenes[0].id
 
-        # Parse video mapping from display groups
+        # Parse video mappings from displayConfig (new format)
+        for dc in project.display_config:
+            vm = dc.get("videoMapping", {})
+            if vm.get("enabled"):
+                mapping = self._parse_video_mapping(vm, dc.get("sceneId"))
+                if mapping:
+                    project.video_mappings.append(mapping)
+                    # Also set as default if first one
+                    if not project.video_mapping:
+                        project.video_mapping = mapping
+
+        # Also check displayGroups (legacy format)
         display_groups = data.get("displayGroups", [])
-        if display_groups:
-            for group in display_groups:
-                screens = group.get("screens", [])
-                for screen in screens:
-                    vm = screen.get("videoMapping", {})
-                    if vm.get("enabled"):
-                        pp = vm.get("perspectivePoints", {})
-                        project.video_mapping = VideoMappingConfig(
-                            enabled=True,
-                            mode=vm.get("mode", "perspective"),
-                            top_left=(
-                                pp.get("topLeft", {}).get("x", 0),
-                                pp.get("topLeft", {}).get("y", 0)
-                            ),
-                            top_right=(
-                                pp.get("topRight", {}).get("x", 1),
-                                pp.get("topRight", {}).get("y", 0)
-                            ),
-                            bottom_left=(
-                                pp.get("bottomLeft", {}).get("x", 0),
-                                pp.get("bottomLeft", {}).get("y", 1)
-                            ),
-                            bottom_right=(
-                                pp.get("bottomRight", {}).get("x", 1),
-                                pp.get("bottomRight", {}).get("y", 1)
-                            ),
-                            background_color=vm.get("backgroundColor", "#000000"),
-                        )
-                        break
+        for group in display_groups:
+            screens = group.get("screens", [])
+            for screen in screens:
+                vm = screen.get("videoMapping", {})
+                if vm.get("enabled"):
+                    mapping = self._parse_video_mapping(vm, screen.get("sceneId"))
+                    if mapping:
+                        project.video_mappings.append(mapping)
+                        if not project.video_mapping:
+                            project.video_mapping = mapping
 
         return project
+
+    def _parse_video_mapping(self, vm: dict, scene_id: str = None) -> Optional[VideoMappingConfig]:
+        """Parse video mapping configuration from JSON data"""
+        if not vm.get("enabled"):
+            return None
+
+        mode = vm.get("mode", "perspective")
+        pp = vm.get("perspectivePoints", {})
+
+        # Parse mesh grid if present
+        mesh_grid = None
+        mesh_data = vm.get("meshGrid", {})
+        if mesh_data and mesh_data.get("points"):
+            mesh_grid = MeshGrid(
+                rows=mesh_data.get("rows", 1),
+                cols=mesh_data.get("cols", 1),
+                points=mesh_data.get("points", [])
+            )
+
+        # Parse target resolution
+        target_res = vm.get("targetResolution")
+        source_res = vm.get("sourceResolution")
+
+        return VideoMappingConfig(
+            enabled=True,
+            mode=mode,
+            top_left=(
+                pp.get("topLeft", {}).get("x", 0),
+                pp.get("topLeft", {}).get("y", 0)
+            ),
+            top_right=(
+                pp.get("topRight", {}).get("x", 1),
+                pp.get("topRight", {}).get("y", 0)
+            ),
+            bottom_left=(
+                pp.get("bottomLeft", {}).get("x", 0),
+                pp.get("bottomLeft", {}).get("y", 1)
+            ),
+            bottom_right=(
+                pp.get("bottomRight", {}).get("x", 1),
+                pp.get("bottomRight", {}).get("y", 1)
+            ),
+            mesh_grid=mesh_grid,
+            background_color=vm.get("backgroundColor", "#000000"),
+            target_resolution=target_res,
+            source_resolution=source_res,
+            scene_id=scene_id,
+        )
 
     def _load_scene(self, scene_ref: dict, base_path: Path) -> Optional[Scene]:
         """Load scene from file reference"""

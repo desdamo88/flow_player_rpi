@@ -236,6 +236,35 @@ body {
     stroke-width: 0.5;
 }
 
+/* Mesh grid visualization */
+.mapping-cell {
+    fill: rgba(147, 51, 234, 0.15);
+    stroke: #9333ea;
+    stroke-width: 0.3;
+}
+
+.mapping-point {
+    fill: #6366f1;
+    stroke: white;
+    stroke-width: 0.3;
+}
+
+.mapping-point.deformed {
+    fill: #f59e0b;
+    stroke: white;
+    stroke-width: 0.5;
+    filter: drop-shadow(0 0 2px rgba(245, 158, 11, 0.5));
+}
+
+.badge.deformed {
+    background: #f59e0b;
+    color: white;
+    padding: 0.15rem 0.4rem;
+    border-radius: 3px;
+    font-size: 0.7rem;
+    font-weight: 500;
+}
+
 .preview-controls {
     display: flex;
     justify-content: space-between;
