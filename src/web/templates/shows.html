@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+
+{% block title %}Shows - Flow Player{% endblock %}
+
+{% block content %}
+<div class="shows-page">
+    <div class="page-header">
+        <h1>Shows</h1>
+        <label class="btn btn-primary upload-btn">
+            <input type="file" id="upload-input" accept=".zip" style="display: none;" onchange="uploadShow(this)">
+            + Upload
+        </label>
+    </div>
+
+    <div id="upload-progress" class="upload-progress" style="display: none;">
+        <div class="progress-bar">
+            <div id="upload-progress-fill" class="progress-fill"></div>
+        </div>
+        <span id="upload-status">Upload en cours...</span>
+    </div>
+
+    <div id="shows-list" class="shows-list">
+        <p class="loading">Chargement...</p>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    let activeShowId = null;
+
+    async function loadShows() {
+        const response = await apiFetch('/api/shows');
+        if (response) {
+            activeShowId = response.active_show;
+            renderShows(response.shows);
+        }
+    }
+
+    function renderShows(shows) {
+        const container = document.getElementById('shows-list');
+
+        if (!shows || shows.length === 0) {
+            container.innerHTML = '<p class="empty">Aucun show disponible. Uploadez un package .zip pour commencer.</p>';
+            return;
+        }
+
+        container.innerHTML = shows.map(show => `
+            <div class="show-card ${show.id === activeShowId ? 'active' : ''}">
+                <div class="show-info">
+                    <div class="show-header">
+                        <span class="show-indicator">${show.id === activeShowId ? '●' : '○'}</span>
+                        <h3>${show.name}</h3>
+                        ${show.id === activeShowId ? '<span class="badge">ACTIF</span>' : ''}
+                    </div>
+                    <div class="show-meta">
+                        <span>Duree: ${formatTime(show.duration_ms)}</span>
+                        <span>Taille: ${show.size_mb} MB</span>
+                    </div>
+                    ${show.description ? `<p class="show-desc">${show.description}</p>` : ''}
+                </div>
+                <div class="show-actions">
+                    ${show.id !== activeShowId
+                        ? `<button class="btn btn-secondary" onclick="activateShow('${show.id}')">Activer</button>`
+                        : ''}
+                    <button class="btn btn-danger" onclick="deleteShow('${show.id}', '${show.name}')">Supprimer</button>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    async function activateShow(showId) {
+        const response = await apiPost(`/api/shows/${showId}/activate`);
+        if (response && response.success) {
+            loadShows();
+        }
+    }
+
+    async function deleteShow(showId, showName) {
+        if (!confirm(`Supprimer le show "${showName}" ?`)) return;
+
+        const response = await apiDelete(`/api/shows/${showId}`);
+        if (response && response.success) {
+            loadShows();
+        }
+    }
+
+    async function uploadShow(input) {
+        if (!input.files || !input.files[0]) return;
+
+        const file = input.files[0];
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const progressDiv = document.getElementById('upload-progress');
+        const progressFill = document.getElementById('upload-progress-fill');
+        const statusText = document.getElementById('upload-status');
+
+        progressDiv.style.display = 'block';
+        progressFill.style.width = '0%';
+        statusText.textContent = `Upload de ${file.name}...`;
+
+        try {
+            const xhr = new XMLHttpRequest();
+
+            xhr.upload.addEventListener('progress', (e) => {
+                if (e.lengthComputable) {
+                    const percent = (e.loaded / e.total) * 100;
+                    progressFill.style.width = `${percent}%`;
+                }
+            });
+
+            xhr.addEventListener('load', () => {
+                if (xhr.status === 200) {
+                    statusText.textContent = 'Upload termine!';
+                    setTimeout(() => {
+                        progressDiv.style.display = 'none';
+                        loadShows();
+                    }, 1000);
+                } else {
+                    statusText.textContent = 'Erreur lors de l\'upload';
+                }
+            });
+
+            xhr.addEventListener('error', () => {
+                statusText.textContent = 'Erreur de connexion';
+            });
+
+            xhr.open('POST', '/api/shows/upload');
+            xhr.send(formData);
+
+        } catch (e) {
+            statusText.textContent = `Erreur: ${e.message}`;
+        }
+
+        input.value = '';
+    }
+
+    // Load shows on page load
+    loadShows();
+</script>
+{% endblock %}

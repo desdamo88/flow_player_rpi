@@ -1,0 +1,450 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Flow Player{% endblock %}
+
+{% block content %}
+<div class="dashboard">
+    <div class="player-card">
+        <div class="player-preview-container">
+            <div class="player-preview" id="player-preview">
+                <div id="preview-placeholder" class="preview-placeholder">
+                    <span>Sélectionnez une scène</span>
+                </div>
+                <video id="preview-video" class="preview-video" controls loop muted>
+                    Votre navigateur ne supporte pas la lecture vidéo.
+                </video>
+                <!-- Mapping overlay -->
+                <div id="mapping-overlay" class="mapping-overlay" style="display: none;">
+                    <svg class="mapping-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
+                        <polygon id="mapping-polygon" class="mapping-shape" points="0,0 100,0 100,100 0,100"/>
+                        <circle id="corner-tl" class="mapping-corner" cx="0" cy="0" r="3"/>
+                        <circle id="corner-tr" class="mapping-corner" cx="100" cy="0" r="3"/>
+                        <circle id="corner-bl" class="mapping-corner" cx="0" cy="100" r="3"/>
+                        <circle id="corner-br" class="mapping-corner" cx="100" cy="100" r="3"/>
+                    </svg>
+                </div>
+            </div>
+            <div class="preview-controls">
+                <label class="toggle-mapping">
+                    <input type="checkbox" id="show-mapping" onchange="toggleMappingOverlay()">
+                    <span>Afficher le mapping</span>
+                </label>
+                <div id="mapping-info" class="mapping-info" style="display: none;"></div>
+            </div>
+        </div>
+
+        <div class="player-progress">
+            <div class="progress-bar">
+                <div id="progress-fill" class="progress-fill" style="width: 0%"></div>
+            </div>
+            <div class="progress-time">
+                <span id="time-current">00:00</span>
+                <span id="time-duration">00:00</span>
+            </div>
+        </div>
+
+        <div class="player-controls">
+            <button id="btn-stop" class="btn btn-control" onclick="controlStop()">
+                <span class="icon">&#9632;</span> STOP
+            </button>
+            <button id="btn-play" class="btn btn-control btn-primary" onclick="controlPlay()">
+                <span class="icon">&#9654;</span> PLAY
+            </button>
+            <button id="btn-restart" class="btn btn-control" onclick="controlRestart()">
+                <span class="icon">&#8634;</span> RESTART
+            </button>
+        </div>
+    </div>
+
+    <div class="project-info" id="project-info" style="display: none;">
+        <div class="project-header">
+            <h3 id="project-name">Projet</h3>
+            <div class="project-badges">
+                <span id="mapping-badge" class="badge mapping" style="display: none;">📐 Mapping actif</span>
+                <span id="resolution-badge" class="badge resolution"></span>
+            </div>
+        </div>
+    </div>
+
+    <div class="scenes-section">
+        <h3>Scènes</h3>
+        <div id="scenes-list" class="scenes-list">
+            <p class="loading">Chargement des scènes...</p>
+        </div>
+    </div>
+
+    <div class="info-cards">
+        <div class="info-card">
+            <h3>Show actif</h3>
+            <p id="show-name" class="show-name">--</p>
+            <p id="show-status" class="show-status">--</p>
+        </div>
+
+        <div class="info-card">
+            <h3>Scène active</h3>
+            <p id="scene-name" class="scene-name">--</p>
+            <p id="scene-info" class="scene-info">--</p>
+        </div>
+
+        <div class="info-card">
+            <h3>Planification</h3>
+            <p id="schedule-next" class="schedule-next">--</p>
+            <p id="schedule-triggers" class="schedule-triggers">--</p>
+        </div>
+
+        <div class="info-card">
+            <h3>DMX</h3>
+            <p id="dmx-status">--</p>
+            <p id="dmx-info">--</p>
+        </div>
+
+        <div class="info-card network-card">
+            <h3>Réseau</h3>
+            <p id="network-ip" class="network-ip">--</p>
+            <p id="network-hostname" class="network-hostname">--</p>
+            <p class="network-hint">Accès: <a id="network-url" href="#" target="_blank">--</a></p>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    let currentSceneId = null;
+    let currentMapping = null;
+    const videoElement = document.getElementById('preview-video');
+    const placeholderElement = document.getElementById('preview-placeholder');
+    const mappingOverlay = document.getElementById('mapping-overlay');
+    const mappingInfo = document.getElementById('mapping-info');
+
+    // Load scenes list
+    async function loadScenes() {
+        try {
+            const response = await fetch('/api/scenes');
+            const data = await response.json();
+
+            const container = document.getElementById('scenes-list');
+
+            // Update project info
+            if (data.project && data.project.name) {
+                document.getElementById('project-info').style.display = 'block';
+                document.getElementById('project-name').textContent = data.project.name;
+
+                if (data.project.resolution) {
+                    document.getElementById('resolution-badge').textContent =
+                        `${data.project.resolution.width}x${data.project.resolution.height}`;
+                }
+
+                if (data.project.video_mapping && data.project.video_mapping.enabled) {
+                    document.getElementById('mapping-badge').style.display = 'inline-block';
+                    currentMapping = data.project.video_mapping;
+                    updateMappingVisualization();
+                } else {
+                    currentMapping = null;
+                    document.getElementById('show-mapping').parentElement.style.display = 'none';
+                }
+            }
+
+            if (!data.scenes || data.scenes.length === 0) {
+                container.innerHTML = '<p class="no-scenes">Aucune scène disponible</p>';
+                return;
+            }
+
+            currentSceneId = data.current_scene_id;
+
+            container.innerHTML = data.scenes.map(scene => {
+                // Build warnings HTML
+                let warningsHtml = '';
+                if (scene.interactive_elements && scene.interactive_elements.length > 0) {
+                    const items = scene.interactive_elements.map(e => e.type).join(', ');
+                    warningsHtml += `<div class="scene-warning interactive">
+                        <span class="warning-icon">⚠️</span>
+                        Éléments interactifs non supportés: ${items}
+                    </div>`;
+                }
+                if (scene.unsupported_elements && scene.unsupported_elements.length > 0) {
+                    const items = scene.unsupported_elements.map(e => e.type).join(', ');
+                    warningsHtml += `<div class="scene-warning unsupported">
+                        <span class="warning-icon">❓</span>
+                        Éléments inconnus: ${items}
+                    </div>`;
+                }
+
+                // Build content summary
+                let contentParts = [];
+                if (scene.video_count > 0) contentParts.push(`${scene.video_count} vidéo`);
+                if (scene.audio_count > 0) contentParts.push(`${scene.audio_count} audio`);
+                if (scene.image_count > 0) contentParts.push(`${scene.image_count} image`);
+                const contentSummary = contentParts.join(', ') || 'Vide';
+
+                return `
+                <div class="scene-card ${scene.is_current ? 'active' : ''} ${scene.has_warnings ? 'has-warnings' : ''}"
+                     data-scene-id="${scene.id}"
+                     onclick="selectScene('${scene.id}')">
+                    <div class="scene-info">
+                        <span class="scene-name">${scene.name}</span>
+                        <span class="scene-duration">${formatTime(scene.duration_ms)}</span>
+                    </div>
+                    <div class="scene-meta">
+                        ${scene.has_dmx ? '<span class="badge dmx">DMX: ' + (scene.dmx_sequence_name || 'Oui') + '</span>' : ''}
+                        ${scene.has_mapping ? '<span class="badge mapping">Mapping</span>' : ''}
+                        <span class="badge elements">${contentSummary}</span>
+                    </div>
+                    ${warningsHtml}
+                    ${scene.is_current ? '<span class="playing-indicator">▶ En lecture</span>' : ''}
+                </div>
+            `}).join('');
+
+            // Load video for current scene if any
+            if (currentSceneId) {
+                loadSceneVideo(currentSceneId);
+            }
+
+        } catch (error) {
+            console.error('Error loading scenes:', error);
+            document.getElementById('scenes-list').innerHTML =
+                '<p class="error">Erreur de chargement des scènes</p>';
+        }
+    }
+
+    // Select and play a scene
+    async function selectScene(sceneId) {
+        try {
+            // Update UI immediately
+            document.querySelectorAll('.scene-card').forEach(card => {
+                card.classList.remove('active');
+                const indicator = card.querySelector('.playing-indicator');
+                if (indicator) indicator.remove();
+            });
+
+            const selectedCard = document.querySelector(`[data-scene-id="${sceneId}"]`);
+            if (selectedCard) {
+                selectedCard.classList.add('active');
+                const indicator = document.createElement('span');
+                indicator.className = 'playing-indicator';
+                indicator.textContent = '▶ En lecture';
+                selectedCard.appendChild(indicator);
+            }
+
+            // Load video preview
+            await loadSceneVideo(sceneId);
+
+            // Start playback
+            await apiPost(`/api/scenes/${sceneId}/play`, {loop: true});
+            currentSceneId = sceneId;
+
+        } catch (error) {
+            console.error('Error selecting scene:', error);
+        }
+    }
+
+    // Load video for a scene
+    async function loadSceneVideo(sceneId) {
+        try {
+            const response = await fetch(`/api/scenes/${sceneId}/video`);
+            if (!response.ok) {
+                console.error('No video for scene');
+                showPlaceholder('Pas de vidéo');
+                return;
+            }
+
+            const data = await response.json();
+
+            // Show video, hide placeholder
+            placeholderElement.style.display = 'none';
+            videoElement.style.display = 'block';
+
+            // Set video source
+            videoElement.src = data.video_url;
+            videoElement.load();
+            videoElement.play().catch(e => console.log('Autoplay blocked:', e));
+
+        } catch (error) {
+            console.error('Error loading scene video:', error);
+            showPlaceholder('Erreur de chargement');
+        }
+    }
+
+    // Show placeholder with message
+    function showPlaceholder(message) {
+        placeholderElement.innerHTML = `<span>${message}</span>`;
+        placeholderElement.style.display = 'flex';
+        videoElement.style.display = 'none';
+    }
+
+    // Play a specific scene (legacy function)
+    async function playScene(sceneId) {
+        await selectScene(sceneId);
+    }
+
+    // Dashboard-specific functions
+    function updateDashboard(status) {
+        // Update show info
+        if (status.player) {
+            document.getElementById('show-name').textContent = status.player.current_show || '--';
+
+            let stateText = status.player.state;
+            if (status.player.loop_count > 0) {
+                stateText += ` (boucle #${status.player.loop_count})`;
+            }
+            document.getElementById('show-status').textContent = stateText;
+
+            // Update scene info
+            document.getElementById('scene-name').textContent = status.player.current_scene || '--';
+            document.getElementById('scene-info').textContent = status.player.state;
+
+            // Update progress
+            const progress = status.player.duration_ms > 0
+                ? (status.player.position_ms / status.player.duration_ms) * 100
+                : 0;
+            document.getElementById('progress-fill').style.width = `${progress}%`;
+            document.getElementById('time-current').textContent = formatTime(status.player.position_ms);
+            document.getElementById('time-duration').textContent = formatTime(status.player.duration_ms);
+
+            // Update play/pause button
+            const btnPlay = document.getElementById('btn-play');
+            if (status.player.state === 'playing') {
+                btnPlay.innerHTML = '<span class="icon">&#10074;&#10074;</span> PAUSE';
+                btnPlay.onclick = controlPause;
+            } else {
+                btnPlay.innerHTML = '<span class="icon">&#9654;</span> PLAY';
+                btnPlay.onclick = controlPlay;
+            }
+
+            // Update scene cards active state
+            document.querySelectorAll('.scene-card').forEach(card => {
+                const isPlaying = card.querySelector('.scene-name').textContent === status.player.current_scene;
+                card.classList.toggle('active', isPlaying);
+            });
+        }
+
+        // Update schedule info
+        if (status.schedule) {
+            const nextTrigger = status.schedule.next_trigger
+                ? new Date(status.schedule.next_trigger).toLocaleTimeString('fr-FR', {hour: '2-digit', minute: '2-digit'})
+                : '--';
+            document.getElementById('schedule-next').textContent = `Prochain: ${nextTrigger}`;
+
+            const triggers = status.schedule.triggers_today || [];
+            document.getElementById('schedule-triggers').textContent =
+                triggers.length > 0 ? `Aujourd'hui: ${triggers.join(', ')}` : 'Aucun declenchement';
+        }
+
+        // Update DMX info
+        if (status.dmx) {
+            document.getElementById('dmx-status').textContent =
+                `${status.dmx.protocol.toUpperCase()} - Universe ${status.dmx.universe}`;
+            document.getElementById('dmx-info').textContent =
+                `${status.dmx.fps} FPS - ${status.dmx.target_ip}`;
+        }
+    }
+
+    // Control functions
+    async function controlPlay() {
+        await apiPost('/api/control/play', {loop: true});
+    }
+
+    async function controlPause() {
+        await apiPost('/api/control/pause');
+    }
+
+    async function controlStop() {
+        await apiPost('/api/control/stop');
+    }
+
+    async function controlRestart() {
+        await apiPost('/api/control/restart');
+    }
+
+    // Mapping visualization functions
+    function updateMappingVisualization() {
+        if (!currentMapping) {
+            mappingOverlay.style.display = 'none';
+            mappingInfo.style.display = 'none';
+            return;
+        }
+
+        // Convert mapping points to SVG coordinates (0-100)
+        const tl = currentMapping.top_left || [0, 0];
+        const tr = currentMapping.top_right || [1, 0];
+        const bl = currentMapping.bottom_left || [0, 1];
+        const br = currentMapping.bottom_right || [1, 1];
+
+        // Scale to 0-100
+        const points = [
+            `${tl[0] * 100},${tl[1] * 100}`,
+            `${tr[0] * 100},${tr[1] * 100}`,
+            `${br[0] * 100},${br[1] * 100}`,
+            `${bl[0] * 100},${bl[1] * 100}`
+        ].join(' ');
+
+        document.getElementById('mapping-polygon').setAttribute('points', points);
+        document.getElementById('corner-tl').setAttribute('cx', tl[0] * 100);
+        document.getElementById('corner-tl').setAttribute('cy', tl[1] * 100);
+        document.getElementById('corner-tr').setAttribute('cx', tr[0] * 100);
+        document.getElementById('corner-tr').setAttribute('cy', tr[1] * 100);
+        document.getElementById('corner-bl').setAttribute('cx', bl[0] * 100);
+        document.getElementById('corner-bl').setAttribute('cy', bl[1] * 100);
+        document.getElementById('corner-br').setAttribute('cx', br[0] * 100);
+        document.getElementById('corner-br').setAttribute('cy', br[1] * 100);
+
+        // Update info text
+        mappingInfo.innerHTML = `
+            <strong>Mode:</strong> ${currentMapping.mode || 'perspective'}<br>
+            <small>TL: (${(tl[0]*100).toFixed(1)}%, ${(tl[1]*100).toFixed(1)}%) |
+            TR: (${(tr[0]*100).toFixed(1)}%, ${(tr[1]*100).toFixed(1)}%)<br>
+            BL: (${(bl[0]*100).toFixed(1)}%, ${(bl[1]*100).toFixed(1)}%) |
+            BR: (${(br[0]*100).toFixed(1)}%, ${(br[1]*100).toFixed(1)}%)</small>
+        `;
+        mappingInfo.style.display = 'block';
+
+        // Show toggle if mapping exists
+        document.getElementById('show-mapping').parentElement.style.display = 'flex';
+    }
+
+    function toggleMappingOverlay() {
+        const show = document.getElementById('show-mapping').checked;
+        if (show && currentMapping) {
+            mappingOverlay.style.display = 'block';
+        } else {
+            mappingOverlay.style.display = 'none';
+        }
+    }
+
+    // Load network info
+    async function loadNetworkInfo() {
+        try {
+            const response = await fetch('/api/system/info');
+            if (response.ok) {
+                const data = await response.json();
+                document.getElementById('network-ip').textContent = `IP: ${data.ip || 'Non disponible'}`;
+
+                // Show hostname with .local suffix
+                const hostname = data.hostname_local || data.hostname || 'Non disponible';
+                document.getElementById('network-hostname').textContent = hostname;
+
+                // Build access URLs
+                const urlElement = document.getElementById('network-url');
+                if (data.ip) {
+                    const ipUrl = `http://${data.ip}:5000`;
+                    urlElement.href = ipUrl;
+                    urlElement.textContent = ipUrl;
+
+                    // Add .local URL if available
+                    if (data.hostname_local) {
+                        const localUrl = `http://${data.hostname_local}:5000`;
+                        urlElement.textContent = `${ipUrl} ou ${localUrl}`;
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('Error loading network info:', error);
+        }
+    }
+
+    // Initialize
+    loadScenes();
+    loadNetworkInfo();
+    startStatusPolling(updateDashboard);
+</script>
+{% endblock %}

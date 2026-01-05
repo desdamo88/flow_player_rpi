@@ -1,0 +1,29 @@
+# Flow Player - Dependencies
+# Raspberry Pi 5 Video/Audio/DMX Player
+
+# Web server & API
+flask==3.0.0
+flask-cors==4.0.0
+
+# Video playback
+python-mpv==1.0.6
+
+# DMX output
+stupidArtnet==1.4.0       # Art-Net
+sacn==1.9.0               # sACN / E1.31
+pyserial==3.5             # USB-DMX (ENTTEC, DMXKing)
+
+# Scheduling
+apscheduler==3.10.4
+
+# HTTP client (monitoring/heartbeat)
+requests==2.31.0
+
+# System metrics
+psutil==5.9.0
+
+# Configuration
+python-dotenv==1.0.0
+
+# Utilities
+watchdog==3.0.0           # File system monitoring (USB detection)

@@ -1,0 +1,21 @@
+<?xml version="1.0" standalone='no'?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<!--
+  Flow Player - Avahi mDNS Service Definition
+  This file should be installed to /etc/avahi/services/flow-player.service
+-->
+<service-group>
+  <name replace-wildcards="yes">Flow Player on %h</name>
+
+  <service>
+    <type>_http._tcp</type>
+    <port>5000</port>
+    <txt-record>path=/</txt-record>
+    <txt-record>version=1.0</txt-record>
+  </service>
+
+  <service>
+    <type>_flow-player._tcp</type>
+    <port>5000</port>
+  </service>
+</service-group>

@@ -1,0 +1,280 @@
+{% extends "base.html" %}
+
+{% block title %}Configuration - Flow Player{% endblock %}
+
+{% block content %}
+<div class="settings-page">
+    <h1>Configuration</h1>
+
+    <form id="settings-form" onsubmit="saveSettings(event)">
+        <section class="settings-section">
+            <h2>Reseau</h2>
+            <div class="form-group">
+                <label for="hostname">Hostname</label>
+                <input type="text" id="hostname" name="network.hostname">
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>IP actuelle</label>
+                    <span id="current-ip" class="value">--</span>
+                </div>
+                <div class="form-group">
+                    <label>MAC</label>
+                    <span id="current-mac" class="value">--</span>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Mode IP</label>
+                <div class="radio-group">
+                    <label><input type="radio" name="network.dhcp" value="true" checked> DHCP</label>
+                    <label><input type="radio" name="network.dhcp" value="false"> IP Statique</label>
+                </div>
+            </div>
+        </section>
+
+        <section class="settings-section">
+            <h2>Video</h2>
+            <div class="form-group">
+                <label for="video-output">Sortie</label>
+                <select id="video-output" name="video.output">
+                    <option value="HDMI-1">HDMI-1</option>
+                    <option value="HDMI-2">HDMI-2</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="video-resolution">Resolution</label>
+                <select id="video-resolution" name="video.resolution">
+                    <option value="1920x1080">1920x1080 (Full HD)</option>
+                    <option value="1280x720">1280x720 (HD)</option>
+                    <option value="3840x2160">3840x2160 (4K)</option>
+                </select>
+            </div>
+        </section>
+
+        <section class="settings-section">
+            <h2>Audio</h2>
+            <div class="form-group">
+                <label for="audio-output">Sortie</label>
+                <select id="audio-output" name="audio.output">
+                    <option value="hdmi">HDMI</option>
+                    <option value="jack">Jack 3.5mm</option>
+                    <option value="auto">Auto</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="audio-volume">Volume</label>
+                <div class="range-group">
+                    <input type="range" id="audio-volume" name="audio.volume" min="0" max="100" value="100">
+                    <span id="volume-value">100%</span>
+                </div>
+            </div>
+        </section>
+
+        <section class="settings-section">
+            <h2>DMX</h2>
+            <div class="form-group">
+                <label>Mode</label>
+                <div class="radio-group">
+                    <label><input type="radio" name="dmx.mode" value="artnet"> Art-Net</label>
+                    <label><input type="radio" name="dmx.mode" value="sacn"> sACN</label>
+                    <label><input type="radio" name="dmx.mode" value="usb"> USB Direct</label>
+                </div>
+            </div>
+
+            <div id="artnet-settings" class="dmx-mode-settings">
+                <div class="form-group">
+                    <label for="dmx-ip">IP cible</label>
+                    <input type="text" id="dmx-ip" name="dmx.ip" value="255.255.255.255">
+                </div>
+                <div class="form-group">
+                    <label for="dmx-universe">Universe</label>
+                    <input type="number" id="dmx-universe" name="dmx.universe" value="0" min="0" max="32767">
+                </div>
+            </div>
+
+            <div id="usb-settings" class="dmx-mode-settings" style="display: none;">
+                <div class="form-group">
+                    <label for="dmx-port">Port USB</label>
+                    <select id="dmx-port" name="dmx.usb_port">
+                        <option value="/dev/ttyUSB0">/dev/ttyUSB0</option>
+                        <option value="/dev/ttyUSB1">/dev/ttyUSB1</option>
+                        <option value="/dev/ttyACM0">/dev/ttyACM0</option>
+                    </select>
+                    <button type="button" class="btn btn-small" onclick="scanUSBDevices()">Scanner</button>
+                </div>
+                <div class="form-group">
+                    <label for="dmx-driver">Driver</label>
+                    <select id="dmx-driver" name="dmx.usb_driver">
+                        <option value="enttec_pro">ENTTEC Pro</option>
+                        <option value="enttec_open">ENTTEC Open</option>
+                        <option value="dmxking">DMXKing</option>
+                    </select>
+                </div>
+            </div>
+        </section>
+
+        <section class="settings-section">
+            <h2>Monitoring</h2>
+            <div class="form-group">
+                <label class="checkbox-label">
+                    <input type="checkbox" id="heartbeat-enabled" name="monitoring.heartbeat_enabled">
+                    Heartbeat active
+                </label>
+            </div>
+            <div class="form-group">
+                <label for="heartbeat-url">URL serveur</label>
+                <input type="url" id="heartbeat-url" name="monitoring.heartbeat_url" placeholder="https://monitor.example.com/api/status">
+            </div>
+            <div class="form-group">
+                <label for="heartbeat-interval">Intervalle (secondes)</label>
+                <input type="number" id="heartbeat-interval" name="monitoring.heartbeat_interval_sec" value="30" min="10" max="3600">
+            </div>
+        </section>
+
+        <div class="form-actions">
+            <button type="button" class="btn btn-secondary" onclick="loadConfig()">Annuler</button>
+            <button type="submit" class="btn btn-primary">Enregistrer</button>
+        </div>
+    </form>
+
+    <section class="settings-section system-section">
+        <h2>Systeme</h2>
+        <div class="system-actions">
+            <button class="btn btn-warning" onclick="restartPlayer()">Redemarrer Player</button>
+            <button class="btn btn-warning" onclick="rebootSystem()">Redemarrer Pi</button>
+            <button class="btn btn-danger" onclick="shutdownSystem()">Eteindre</button>
+        </div>
+    </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    async function loadConfig() {
+        const config = await apiFetch('/api/config');
+        if (!config) return;
+
+        // Network
+        setFormValue('hostname', config.network?.hostname);
+        setRadioValue('network.dhcp', config.network?.dhcp ? 'true' : 'false');
+
+        // Video
+        setFormValue('video-output', config.video?.output);
+        setFormValue('video-resolution', config.video?.resolution);
+
+        // Audio
+        setFormValue('audio-output', config.audio?.output);
+        setFormValue('audio-volume', config.audio?.volume);
+        document.getElementById('volume-value').textContent = `${config.audio?.volume || 100}%`;
+
+        // DMX
+        setRadioValue('dmx.mode', config.dmx?.mode);
+        setFormValue('dmx-ip', config.dmx?.ip);
+        setFormValue('dmx-universe', config.dmx?.universe);
+        setFormValue('dmx-port', config.dmx?.usb_port);
+        setFormValue('dmx-driver', config.dmx?.usb_driver);
+        updateDMXSettings(config.dmx?.mode);
+
+        // Monitoring
+        document.getElementById('heartbeat-enabled').checked = config.monitoring?.heartbeat_enabled;
+        setFormValue('heartbeat-url', config.monitoring?.heartbeat_url);
+        setFormValue('heartbeat-interval', config.monitoring?.heartbeat_interval_sec);
+
+        // System info
+        const sysInfo = await apiFetch('/api/system/info');
+        if (sysInfo) {
+            document.getElementById('current-ip').textContent = sysInfo.ip || '--';
+            document.getElementById('current-mac').textContent = sysInfo.mac || '--';
+        }
+    }
+
+    function setFormValue(id, value) {
+        const el = document.getElementById(id);
+        if (el && value !== undefined) el.value = value;
+    }
+
+    function setRadioValue(name, value) {
+        const radio = document.querySelector(`input[name="${name}"][value="${value}"]`);
+        if (radio) radio.checked = true;
+    }
+
+    function updateDMXSettings(mode) {
+        document.getElementById('artnet-settings').style.display =
+            (mode === 'artnet' || mode === 'sacn') ? 'block' : 'none';
+        document.getElementById('usb-settings').style.display =
+            mode === 'usb' ? 'block' : 'none';
+    }
+
+    // DMX mode change handler
+    document.querySelectorAll('input[name="dmx.mode"]').forEach(radio => {
+        radio.addEventListener('change', (e) => updateDMXSettings(e.target.value));
+    });
+
+    // Volume slider handler
+    document.getElementById('audio-volume').addEventListener('input', (e) => {
+        document.getElementById('volume-value').textContent = `${e.target.value}%`;
+    });
+
+    async function saveSettings(event) {
+        event.preventDefault();
+
+        const form = document.getElementById('settings-form');
+        const formData = new FormData(form);
+
+        const config = {
+            network: {
+                hostname: formData.get('network.hostname'),
+                dhcp: formData.get('network.dhcp') === 'true'
+            },
+            video: {
+                output: formData.get('video.output'),
+                resolution: formData.get('video.resolution')
+            },
+            audio: {
+                output: formData.get('audio.output'),
+                volume: parseInt(formData.get('audio.volume'))
+            },
+            dmx: {
+                mode: formData.get('dmx.mode'),
+                ip: formData.get('dmx.ip'),
+                universe: parseInt(formData.get('dmx.universe')),
+                usb_port: formData.get('dmx.usb_port'),
+                usb_driver: formData.get('dmx.usb_driver')
+            },
+            monitoring: {
+                heartbeat_enabled: document.getElementById('heartbeat-enabled').checked,
+                heartbeat_url: formData.get('monitoring.heartbeat_url'),
+                heartbeat_interval_sec: parseInt(formData.get('monitoring.heartbeat_interval_sec'))
+            }
+        };
+
+        const response = await apiPut('/api/config', config);
+        if (response && response.success) {
+            alert('Configuration enregistree');
+        }
+    }
+
+    async function scanUSBDevices() {
+        // This would scan for USB DMX devices
+        alert('Scan USB non implemente');
+    }
+
+    async function restartPlayer() {
+        if (!confirm('Redemarrer le player ?')) return;
+        await apiPost('/api/control/restart');
+    }
+
+    async function rebootSystem() {
+        if (!confirm('Redemarrer le Raspberry Pi ?')) return;
+        await apiPost('/api/system/reboot');
+    }
+
+    async function shutdownSystem() {
+        if (!confirm('Eteindre le Raspberry Pi ?')) return;
+        await apiPost('/api/system/shutdown');
+    }
+
+    // Load config on page load
+    loadConfig();
+</script>
+{% endblock %}

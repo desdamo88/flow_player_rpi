@@ -1,0 +1,299 @@
+{% extends "base.html" %}
+
+{% block title %}Planification - Flow Player{% endblock %}
+
+{% block content %}
+<div class="schedule-page">
+    <div class="page-header">
+        <h1>Planification</h1>
+        <label class="toggle">
+            <input type="checkbox" id="schedule-enabled" onchange="toggleSchedule()">
+            <span class="toggle-slider"></span>
+            Activee
+        </label>
+    </div>
+
+    <div class="schedule-mode">
+        <h3>Mode</h3>
+        <div class="mode-options">
+            <label class="radio-option">
+                <input type="radio" name="mode" value="manual" onchange="setMode('manual')">
+                <span>Manuel</span>
+                <small>Declenchement via interface uniquement</small>
+            </label>
+            <label class="radio-option">
+                <input type="radio" name="mode" value="continuous" onchange="setMode('continuous')">
+                <span>Boucle continue</span>
+                <small>Lecture en boucle permanente</small>
+            </label>
+            <label class="radio-option">
+                <input type="radio" name="mode" value="scheduled" onchange="setMode('scheduled')">
+                <span>Planifie</span>
+                <small>Selon les regles horaires</small>
+            </label>
+        </div>
+    </div>
+
+    <div id="rules-section" class="rules-section">
+        <h3>Regles horaires</h3>
+        <div id="rules-list" class="rules-list"></div>
+        <button class="btn btn-secondary" onclick="addRule()">+ Ajouter une regle</button>
+    </div>
+
+    <div class="exceptions-section">
+        <h3>Exceptions</h3>
+        <div id="exceptions-list" class="exceptions-list"></div>
+        <button class="btn btn-secondary" onclick="addException()">+ Ajouter une exception</button>
+    </div>
+
+    <div class="actions">
+        <button class="btn btn-primary" onclick="saveSchedule()">Enregistrer</button>
+    </div>
+</div>
+
+<!-- Add Rule Modal -->
+<div id="rule-modal" class="modal" style="display: none;">
+    <div class="modal-content">
+        <h3 id="modal-title">Nouvelle regle</h3>
+        <input type="hidden" id="rule-id">
+
+        <div class="form-group">
+            <label>Jours</label>
+            <div class="days-selector">
+                <label><input type="checkbox" value="mon"> L</label>
+                <label><input type="checkbox" value="tue"> M</label>
+                <label><input type="checkbox" value="wed"> M</label>
+                <label><input type="checkbox" value="thu"> J</label>
+                <label><input type="checkbox" value="fri"> V</label>
+                <label><input type="checkbox" value="sat"> S</label>
+                <label><input type="checkbox" value="sun"> D</label>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label>Horaires</label>
+            <div id="times-list" class="times-list"></div>
+            <button type="button" class="btn btn-small" onclick="addTime()">+ Horaire</button>
+        </div>
+
+        <div class="modal-actions">
+            <button class="btn btn-secondary" onclick="closeModal()">Annuler</button>
+            <button class="btn btn-primary" onclick="saveRule()">Enregistrer</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    let currentSchedule = null;
+
+    async function loadSchedule() {
+        const response = await apiFetch('/api/schedule');
+        if (response) {
+            currentSchedule = response;
+            renderSchedule(response);
+        }
+    }
+
+    function renderSchedule(schedule) {
+        document.getElementById('schedule-enabled').checked = schedule.enabled;
+
+        // Set mode
+        document.querySelectorAll('input[name="mode"]').forEach(input => {
+            input.checked = input.value === schedule.mode;
+        });
+
+        // Show/hide rules section
+        const rulesSection = document.getElementById('rules-section');
+        rulesSection.style.display = schedule.mode === 'scheduled' ? 'block' : 'none';
+
+        // Render rules
+        renderRules(schedule.rules || []);
+
+        // Render exceptions
+        renderExceptions(schedule.exceptions || []);
+    }
+
+    function renderRules(rules) {
+        const container = document.getElementById('rules-list');
+
+        if (!rules || rules.length === 0) {
+            container.innerHTML = '<p class="empty">Aucune regle configuree</p>';
+            return;
+        }
+
+        const dayNames = {mon: 'L', tue: 'M', wed: 'M', thu: 'J', fri: 'V', sat: 'S', sun: 'D'};
+
+        container.innerHTML = rules.map((rule, index) => `
+            <div class="rule-card ${rule.enabled ? '' : 'disabled'}">
+                <div class="rule-header">
+                    <span>Regle ${index + 1}</span>
+                    <label class="toggle small">
+                        <input type="checkbox" ${rule.enabled ? 'checked' : ''}
+                               onchange="toggleRule('${rule.id}', this.checked)">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <div class="rule-days">
+                    ${['mon','tue','wed','thu','fri','sat','sun'].map(day =>
+                        `<span class="${rule.days.includes(day) ? 'active' : ''}">${dayNames[day]}</span>`
+                    ).join('')}
+                </div>
+                <div class="rule-times">
+                    ${rule.times.join(', ')}
+                </div>
+                <div class="rule-actions">
+                    <button class="btn btn-small" onclick="editRule('${rule.id}')">Modifier</button>
+                    <button class="btn btn-small btn-danger" onclick="deleteRule('${rule.id}')">Supprimer</button>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    function renderExceptions(exceptions) {
+        const container = document.getElementById('exceptions-list');
+
+        if (!exceptions || exceptions.length === 0) {
+            container.innerHTML = '<p class="empty">Aucune exception</p>';
+            return;
+        }
+
+        container.innerHTML = exceptions.map(exc => `
+            <div class="exception-card">
+                <span class="exception-date">${formatDate(exc.date)}</span>
+                <span class="exception-reason">${exc.reason || 'Aucun declenchement'}</span>
+                <button class="btn btn-small btn-danger" onclick="deleteException('${exc.date}')">&times;</button>
+            </div>
+        `).join('');
+    }
+
+    function formatDate(dateStr) {
+        const date = new Date(dateStr);
+        return date.toLocaleDateString('fr-FR', {day: '2-digit', month: '2-digit', year: 'numeric'});
+    }
+
+    async function toggleSchedule() {
+        const enabled = document.getElementById('schedule-enabled').checked;
+        currentSchedule.enabled = enabled;
+    }
+
+    async function setMode(mode) {
+        currentSchedule.mode = mode;
+        renderSchedule(currentSchedule);
+    }
+
+    function addRule() {
+        document.getElementById('modal-title').textContent = 'Nouvelle regle';
+        document.getElementById('rule-id').value = '';
+
+        // Reset form
+        document.querySelectorAll('.days-selector input').forEach(cb => cb.checked = false);
+        document.getElementById('times-list').innerHTML = '';
+        addTime();
+
+        document.getElementById('rule-modal').style.display = 'flex';
+    }
+
+    function editRule(ruleId) {
+        const rule = currentSchedule.rules.find(r => r.id === ruleId);
+        if (!rule) return;
+
+        document.getElementById('modal-title').textContent = 'Modifier la regle';
+        document.getElementById('rule-id').value = ruleId;
+
+        // Set days
+        document.querySelectorAll('.days-selector input').forEach(cb => {
+            cb.checked = rule.days.includes(cb.value);
+        });
+
+        // Set times
+        const timesList = document.getElementById('times-list');
+        timesList.innerHTML = '';
+        rule.times.forEach(time => addTime(time));
+
+        document.getElementById('rule-modal').style.display = 'flex';
+    }
+
+    function addTime(value = '09:00') {
+        const timesList = document.getElementById('times-list');
+        const div = document.createElement('div');
+        div.className = 'time-input';
+        div.innerHTML = `
+            <input type="time" value="${value}">
+            <button type="button" class="btn btn-small btn-danger" onclick="this.parentElement.remove()">&times;</button>
+        `;
+        timesList.appendChild(div);
+    }
+
+    function closeModal() {
+        document.getElementById('rule-modal').style.display = 'none';
+    }
+
+    function saveRule() {
+        const ruleId = document.getElementById('rule-id').value || 'rule_' + Date.now();
+
+        const days = Array.from(document.querySelectorAll('.days-selector input:checked'))
+            .map(cb => cb.value);
+
+        const times = Array.from(document.querySelectorAll('#times-list input'))
+            .map(input => input.value)
+            .filter(t => t);
+
+        if (days.length === 0 || times.length === 0) {
+            alert('Selectionnez au moins un jour et un horaire');
+            return;
+        }
+
+        const rule = {id: ruleId, days, times, enabled: true};
+
+        const existingIndex = currentSchedule.rules.findIndex(r => r.id === ruleId);
+        if (existingIndex >= 0) {
+            currentSchedule.rules[existingIndex] = rule;
+        } else {
+            currentSchedule.rules.push(rule);
+        }
+
+        closeModal();
+        renderRules(currentSchedule.rules);
+    }
+
+    function toggleRule(ruleId, enabled) {
+        const rule = currentSchedule.rules.find(r => r.id === ruleId);
+        if (rule) {
+            rule.enabled = enabled;
+        }
+    }
+
+    function deleteRule(ruleId) {
+        if (!confirm('Supprimer cette regle ?')) return;
+        currentSchedule.rules = currentSchedule.rules.filter(r => r.id !== ruleId);
+        renderRules(currentSchedule.rules);
+    }
+
+    function addException() {
+        const date = prompt('Date (YYYY-MM-DD):');
+        if (!date) return;
+
+        const reason = prompt('Raison (optionnel):') || '';
+
+        currentSchedule.exceptions.push({date, times: [], reason});
+        renderExceptions(currentSchedule.exceptions);
+    }
+
+    function deleteException(date) {
+        currentSchedule.exceptions = currentSchedule.exceptions.filter(e => e.date !== date);
+        renderExceptions(currentSchedule.exceptions);
+    }
+
+    async function saveSchedule() {
+        const response = await apiPut('/api/schedule', currentSchedule);
+        if (response && response.success) {
+            alert('Planification enregistree');
+        }
+    }
+
+    // Load schedule on page load
+    loadSchedule();
+</script>
+{% endblock %}

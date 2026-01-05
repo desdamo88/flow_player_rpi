@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+
+{% block title %}Logs - Flow Player{% endblock %}
+
+{% block content %}
+<div class="logs-page">
+    <div class="page-header">
+        <h1>Logs</h1>
+        <div class="logs-controls">
+            <select id="log-level" onchange="loadLogs()">
+                <option value="all">Tous</option>
+                <option value="error">Erreurs</option>
+                <option value="warning">Warnings</option>
+                <option value="info">Info</option>
+            </select>
+            <button class="btn btn-secondary" onclick="loadLogs()">Actualiser</button>
+            <button class="btn btn-secondary" onclick="downloadLogs()">Telecharger</button>
+        </div>
+    </div>
+
+    <div id="logs-container" class="logs-container">
+        <pre id="logs-content">Chargement...</pre>
+    </div>
+
+    <div class="logs-footer">
+        <label>
+            <input type="checkbox" id="auto-scroll" checked> Auto-scroll
+        </label>
+        <label>
+            <input type="checkbox" id="auto-refresh" onchange="toggleAutoRefresh()"> Rafraichissement auto (5s)
+        </label>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    let autoRefreshInterval = null;
+
+    async function loadLogs() {
+        const level = document.getElementById('log-level').value;
+        const response = await apiFetch(`/api/logs?lines=500&level=${level}`);
+
+        if (response && response.logs) {
+            const content = document.getElementById('logs-content');
+            content.innerHTML = response.logs.map(line => formatLogLine(line)).join('');
+
+            if (document.getElementById('auto-scroll').checked) {
+                const container = document.getElementById('logs-container');
+                container.scrollTop = container.scrollHeight;
+            }
+        }
+    }
+
+    function formatLogLine(line) {
+        let className = 'log-line';
+
+        if (line.includes('ERROR') || line.includes('CRITICAL')) {
+            className += ' log-error';
+        } else if (line.includes('WARNING')) {
+            className += ' log-warning';
+        } else if (line.includes('DEBUG')) {
+            className += ' log-debug';
+        }
+
+        return `<div class="${className}">${escapeHtml(line)}</div>`;
+    }
+
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    function toggleAutoRefresh() {
+        const enabled = document.getElementById('auto-refresh').checked;
+
+        if (enabled) {
+            autoRefreshInterval = setInterval(loadLogs, 5000);
+        } else if (autoRefreshInterval) {
+            clearInterval(autoRefreshInterval);
+            autoRefreshInterval = null;
+        }
+    }
+
+    async function downloadLogs() {
+        const response = await apiFetch('/api/logs?lines=10000');
+
+        if (response && response.logs) {
+            const content = response.logs.join('');
+            const blob = new Blob([content], {type: 'text/plain'});
+            const url = URL.createObjectURL(blob);
+
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `flow-player-logs-${new Date().toISOString().slice(0,10)}.txt`;
+            a.click();
+
+            URL.revokeObjectURL(url);
+        }
+    }
+
+    // Load logs on page load
+    loadLogs();
+</script>
+{% endblock %}

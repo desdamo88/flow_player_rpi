@@ -1,0 +1,36 @@
+[Unit]
+Description=Flow Player - Video/Audio/DMX Player for Raspberry Pi
+After=network.target sound.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/opt/flow-player
+Environment=PYTHONUNBUFFERED=1
+Environment=HOME=/home/pi
+ExecStart=/opt/flow-player/venv/bin/python -m src.main
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Give time for video player to initialize
+TimeoutStartSec=30
+
+# Watchdog
+WatchdogSec=60
+
+# Resource limits
+MemoryMax=1G
+CPUQuota=80%
+
+# Security hardening (adjust as needed for hardware access)
+ProtectSystem=false
+ProtectHome=false
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
