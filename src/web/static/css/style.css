@@ -194,6 +194,18 @@ body {
     height: 100%;
 }
 
+/* Video wrapper for CSS transform-based mapping preview */
+.video-wrapper {
+    width: 100%;
+    height: 100%;
+    position: relative;
+    /* Enable 3D transforms for perspective effect */
+    transform-style: preserve-3d;
+    backface-visibility: hidden;
+    /* Smooth transitions when toggling mapping */
+    transition: transform 0.3s ease-out;
+}
+
 .preview-video {
     width: 100%;
     height: 100%;
@@ -206,54 +218,6 @@ body {
     width: 100%;
     height: 100%;
     object-fit: contain;
-}
-
-/* Mapping overlay */
-.mapping-overlay {
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    pointer-events: none;
-}
-
-.mapping-svg {
-    width: 100%;
-    height: 100%;
-}
-
-.mapping-shape {
-    fill: rgba(147, 51, 234, 0.2);
-    stroke: #9333ea;
-    stroke-width: 0.5;
-    stroke-dasharray: 2,2;
-}
-
-.mapping-corner {
-    fill: #9333ea;
-    stroke: white;
-    stroke-width: 0.5;
-}
-
-/* Mesh grid visualization */
-.mapping-cell {
-    fill: rgba(147, 51, 234, 0.15);
-    stroke: #9333ea;
-    stroke-width: 0.3;
-}
-
-.mapping-point {
-    fill: #6366f1;
-    stroke: white;
-    stroke-width: 0.3;
-}
-
-.mapping-point.deformed {
-    fill: #f59e0b;
-    stroke: white;
-    stroke-width: 0.5;
-    filter: drop-shadow(0 0 2px rgba(245, 158, 11, 0.5));
 }
 
 .badge.deformed,

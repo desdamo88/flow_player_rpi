@@ -36,18 +36,24 @@ os.environ.setdefault('FLOW_PLAYER_LOGS_PATH', str(project_root / 'logs'))
 import logging
 
 
-def setup_logging():
-    """Setup logging for development with file output"""
+def setup_logging(log_level: str = "INFO"):
+    """Setup logging for development with file output
+
+    Args:
+        log_level: DEBUG, INFO, WARNING, ERROR (default INFO for dev)
+    """
     log_dir = project_root / 'logs'
     log_dir.mkdir(exist_ok=True)
     log_file = log_dir / 'flow-player.log'
 
+    level = getattr(logging, log_level.upper(), logging.INFO)
+
     # Create handlers
     console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(logging.DEBUG)
+    console_handler.setLevel(level)
 
     file_handler = logging.FileHandler(log_file, mode='a', encoding='utf-8')
-    file_handler.setLevel(logging.DEBUG)
+    file_handler.setLevel(level)
 
     # Create formatter
     formatter = logging.Formatter('%(asctime)s %(levelname)s [%(name)s] %(message)s')
@@ -56,9 +62,13 @@ def setup_logging():
 
     # Setup root logger
     logging.basicConfig(
-        level=logging.DEBUG,
+        level=level,
         handlers=[console_handler, file_handler]
     )
+
+    # Reduce noise from libraries
+    logging.getLogger('werkzeug').setLevel(logging.WARNING)
+    logging.getLogger('urllib3').setLevel(logging.WARNING)
 
     return logging.getLogger(__name__)
 
@@ -127,9 +137,12 @@ def main():
                         help='Web server host (default: 127.0.0.1)')
     parser.add_argument('--no-reload', action='store_true',
                         help='Disable auto-reload (useful for debugging)')
+    parser.add_argument('--log-level', '-l', type=str, default='INFO',
+                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
+                        help='Log level (default: INFO for dev)')
     args = parser.parse_args()
 
-    logger = setup_logging()
+    logger = setup_logging(args.log_level)
 
     logger.info("=" * 60)
     logger.info("Flow Player - Development Mode (Ubuntu)")

@@ -10,24 +10,19 @@
                 <div id="preview-placeholder" class="preview-placeholder">
                     <span>Sélectionnez une scène</span>
                 </div>
-                <video id="preview-video" class="preview-video" controls loop muted>
-                    Votre navigateur ne supporte pas la lecture vidéo.
-                </video>
-                <!-- Mapping overlay -->
-                <div id="mapping-overlay" class="mapping-overlay" style="display: none;">
-                    <svg id="mapping-svg" class="mapping-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
-                        <!-- Will be populated dynamically for mesh or perspective -->
-                        <g id="mapping-shapes"></g>
-                        <g id="mapping-points"></g>
-                    </svg>
+                <!-- Wrapper for CSS perspective transform -->
+                <div id="video-wrapper" class="video-wrapper">
+                    <video id="preview-video" class="preview-video" controls loop muted>
+                        Votre navigateur ne supporte pas la lecture vidéo.
+                    </video>
                 </div>
             </div>
             <div class="preview-controls">
                 <label class="toggle-mapping">
-                    <input type="checkbox" id="show-mapping" onchange="toggleMappingOverlay()">
-                    <span>Afficher le mapping</span>
+                    <input type="checkbox" id="show-mapping" checked onchange="toggleMappingTransform()">
+                    <span>Aperçu déformé</span>
                 </label>
-                <div id="mapping-info" class="mapping-info" style="display: none;"></div>
+                <div id="mapping-info" class="mapping-info"></div>
             </div>
         </div>
 
@@ -111,9 +106,11 @@
     let currentSceneId = null;
     let currentMapping = null;
     let scenesData = {};  // Store all scenes data for mapping lookup
+    let mappingEnabled = true;  // Show deformed preview by default
+
     const videoElement = document.getElementById('preview-video');
+    const videoWrapper = document.getElementById('video-wrapper');
     const placeholderElement = document.getElementById('preview-placeholder');
-    const mappingOverlay = document.getElementById('mapping-overlay');
     const mappingInfo = document.getElementById('mapping-info');
 
     // Load scenes list
@@ -383,147 +380,162 @@
         await apiPost('/api/control/restart');
     }
 
-    // Mapping visualization functions
+    // Mapping visualization - Apply CSS transform to video for deformed preview
     function updateMappingVisualization() {
-        const shapesGroup = document.getElementById('mapping-shapes');
-        const pointsGroup = document.getElementById('mapping-points');
-
         if (!currentMapping || !currentMapping.enabled) {
-            mappingOverlay.style.display = 'none';
-            mappingInfo.style.display = 'none';
+            mappingInfo.innerHTML = '';
             document.getElementById('show-mapping').parentElement.style.display = 'none';
+            resetVideoTransform();
             return;
         }
 
-        // Clear previous content
-        shapesGroup.innerHTML = '';
-        pointsGroup.innerHTML = '';
-
         const mode = currentMapping.mode || 'perspective';
-        let infoHtml = `<strong>Mode:</strong> ${mode}`;
+        let infoHtml = `<strong>${mode === 'mesh' ? 'Mesh' : 'Perspective'}</strong>`;
+
+        // Get corner points (for both perspective and mesh modes)
+        let tl, tr, bl, br;
 
         if (mode === 'mesh' && currentMapping.mesh_grid) {
-            // Render mesh grid
             const mesh = currentMapping.mesh_grid;
             const points = mesh.points || [];
             const rows = mesh.rows || 1;
             const cols = mesh.cols || 1;
 
-            infoHtml += ` (${rows}x${cols} cellules)`;
+            // Use outer corners of mesh for CSS transform approximation
+            tl = points[0]?.[0] || {x: 0, y: 0};
+            tr = points[0]?.[cols] || {x: 1, y: 0};
+            bl = points[rows]?.[0] || {x: 0, y: 1};
+            br = points[rows]?.[cols] || {x: 1, y: 1};
 
-            // Draw mesh cells
-            for (let r = 0; r < rows; r++) {
-                for (let c = 0; c < cols; c++) {
-                    if (points[r] && points[r+1]) {
-                        const p1 = points[r][c] || {x: c/cols, y: r/rows};
-                        const p2 = points[r][c+1] || {x: (c+1)/cols, y: r/rows};
-                        const p3 = points[r+1][c+1] || {x: (c+1)/cols, y: (r+1)/rows};
-                        const p4 = points[r+1][c] || {x: c/cols, y: (r+1)/rows};
-
-                        const polygonPoints = [
-                            `${p1.x * 100},${p1.y * 100}`,
-                            `${p2.x * 100},${p2.y * 100}`,
-                            `${p3.x * 100},${p3.y * 100}`,
-                            `${p4.x * 100},${p4.y * 100}`
-                        ].join(' ');
-
-                        const polygon = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
-                        polygon.setAttribute('points', polygonPoints);
-                        polygon.setAttribute('class', 'mapping-cell');
-                        shapesGroup.appendChild(polygon);
-                    }
-                }
-            }
-
-            // Draw grid points
-            for (let r = 0; r < points.length; r++) {
-                for (let c = 0; c < (points[r] || []).length; c++) {
-                    const p = points[r][c];
-                    if (p) {
-                        const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-                        circle.setAttribute('cx', p.x * 100);
-                        circle.setAttribute('cy', p.y * 100);
-                        circle.setAttribute('r', '2');
-                        circle.setAttribute('class', 'mapping-point');
-
-                        // Check if deformed (not at expected position)
-                        const expectedX = c / cols;
-                        const expectedY = r / rows;
-                        if (Math.abs(p.x - expectedX) > 0.01 || Math.abs(p.y - expectedY) > 0.01) {
-                            circle.setAttribute('class', 'mapping-point deformed');
-                            circle.setAttribute('r', '3');
-                        }
-                        pointsGroup.appendChild(circle);
-                    }
-                }
-            }
-
+            infoHtml += ` (${rows}x${cols})`;
             if (currentMapping.is_deformed) {
                 infoHtml += ' <span class="badge deformed">Déformé</span>';
             }
-
         } else {
-            // Render perspective (4 corners)
+            // Perspective mode - use direct points
             const pp = currentMapping.perspective_points || {};
-            const tl = pp.top_left || {x: 0, y: 0};
-            const tr = pp.top_right || {x: 1, y: 0};
-            const bl = pp.bottom_left || {x: 0, y: 1};
-            const br = pp.bottom_right || {x: 1, y: 1};
-
-            const polygonPoints = [
-                `${tl.x * 100},${tl.y * 100}`,
-                `${tr.x * 100},${tr.y * 100}`,
-                `${br.x * 100},${br.y * 100}`,
-                `${bl.x * 100},${bl.y * 100}`
-            ].join(' ');
-
-            const polygon = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
-            polygon.setAttribute('points', polygonPoints);
-            polygon.setAttribute('class', 'mapping-shape');
-            shapesGroup.appendChild(polygon);
-
-            // Draw corner points
-            const corners = [
-                {p: tl, label: 'TL'},
-                {p: tr, label: 'TR'},
-                {p: bl, label: 'BL'},
-                {p: br, label: 'BR'}
-            ];
-
-            corners.forEach(c => {
-                const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-                circle.setAttribute('cx', c.p.x * 100);
-                circle.setAttribute('cy', c.p.y * 100);
-                circle.setAttribute('r', '3');
-                circle.setAttribute('class', 'mapping-corner');
-                pointsGroup.appendChild(circle);
-            });
-
-            infoHtml += `<br><small>
-                TL: (${(tl.x*100).toFixed(1)}%, ${(tl.y*100).toFixed(1)}%) |
-                TR: (${(tr.x*100).toFixed(1)}%, ${(tr.y*100).toFixed(1)}%)<br>
-                BL: (${(bl.x*100).toFixed(1)}%, ${(bl.y*100).toFixed(1)}%) |
-                BR: (${(br.x*100).toFixed(1)}%, ${(br.y*100).toFixed(1)}%)
-            </small>`;
+            tl = pp.top_left || {x: 0, y: 0};
+            tr = pp.top_right || {x: 1, y: 0};
+            bl = pp.bottom_left || {x: 0, y: 1};
+            br = pp.bottom_right || {x: 1, y: 1};
         }
 
-        if (currentMapping.target_resolution) {
-            const res = currentMapping.target_resolution;
-            infoHtml += `<br><small>Cible: ${res.width}x${res.height}</small>`;
+        // Apply CSS transform if enabled
+        if (mappingEnabled) {
+            applyPerspectiveTransform(tl, tr, bl, br);
+        } else {
+            resetVideoTransform();
         }
 
         mappingInfo.innerHTML = infoHtml;
-        mappingInfo.style.display = 'block';
         document.getElementById('show-mapping').parentElement.style.display = 'flex';
     }
 
-    function toggleMappingOverlay() {
-        const show = document.getElementById('show-mapping').checked;
-        if (show && currentMapping) {
-            mappingOverlay.style.display = 'block';
-        } else {
-            mappingOverlay.style.display = 'none';
+    // Calculate and apply CSS matrix3d transform for perspective effect
+    function applyPerspectiveTransform(tl, tr, bl, br) {
+        const wrapper = videoWrapper;
+        if (!wrapper) return;
+
+        // Get wrapper dimensions
+        const rect = wrapper.parentElement.getBoundingClientRect();
+        const w = rect.width;
+        const h = rect.height;
+
+        // Source corners (original rectangle)
+        const srcPts = [
+            [0, 0], [w, 0], [w, h], [0, h]
+        ];
+
+        // Destination corners (warped)
+        const dstPts = [
+            [tl.x * w, tl.y * h],
+            [tr.x * w, tr.y * h],
+            [br.x * w, br.y * h],
+            [bl.x * w, bl.y * h]
+        ];
+
+        // Calculate CSS matrix3d from the 4 point correspondences
+        const matrix = computePerspectiveMatrix(srcPts, dstPts);
+
+        if (matrix) {
+            wrapper.style.transform = `matrix3d(${matrix.join(',')})`;
+            wrapper.style.transformOrigin = '0 0';
         }
+    }
+
+    // Compute perspective transform matrix from 4 point correspondences
+    // Based on: https://franklinta.com/2014/09/08/computing-css-matrix3d-transforms/
+    function computePerspectiveMatrix(srcPts, dstPts) {
+        // Simplified perspective matrix calculation
+        // For a more accurate result, use a proper homography calculation
+
+        // Extract points
+        const [p0s, p1s, p2s, p3s] = srcPts;
+        const [p0d, p1d, p2d, p3d] = dstPts;
+
+        // Build the adjugate matrix for the mapping
+        function adj(m) {
+            return [
+                m[4]*m[8] - m[5]*m[7], m[2]*m[7] - m[1]*m[8], m[1]*m[5] - m[2]*m[4],
+                m[5]*m[6] - m[3]*m[8], m[0]*m[8] - m[2]*m[6], m[2]*m[3] - m[0]*m[5],
+                m[3]*m[7] - m[4]*m[6], m[1]*m[6] - m[0]*m[7], m[0]*m[4] - m[1]*m[3]
+            ];
+        }
+
+        function multmm(a, b) {
+            const c = [];
+            for (let i = 0; i < 3; i++) {
+                for (let j = 0; j < 3; j++) {
+                    let sum = 0;
+                    for (let k = 0; k < 3; k++) {
+                        sum += a[3*i + k] * b[3*k + j];
+                    }
+                    c[3*i + j] = sum;
+                }
+            }
+            return c;
+        }
+
+        function multmv(m, v) {
+            return [
+                m[0]*v[0] + m[1]*v[1] + m[2]*v[2],
+                m[3]*v[0] + m[4]*v[1] + m[5]*v[2],
+                m[6]*v[0] + m[7]*v[1] + m[8]*v[2]
+            ];
+        }
+
+        function basisToPoints(p0, p1, p2, p3) {
+            const m = [p0[0], p1[0], p2[0], p0[1], p1[1], p2[1], 1, 1, 1];
+            const v = multmv(adj(m), [p3[0], p3[1], 1]);
+            return multmm(m, [v[0], 0, 0, 0, v[1], 0, 0, 0, v[2]]);
+        }
+
+        const s = basisToPoints(p0s, p1s, p2s, p3s);
+        const d = basisToPoints(p0d, p1d, p2d, p3d);
+        const t = multmm(d, adj(s));
+
+        // Normalize
+        for (let i = 0; i < 9; i++) t[i] = t[i] / t[8];
+
+        // Convert 3x3 to CSS matrix3d (4x4)
+        return [
+            t[0], t[3], 0, t[6],
+            t[1], t[4], 0, t[7],
+            0,    0,    1, 0,
+            t[2], t[5], 0, t[8]
+        ];
+    }
+
+    function resetVideoTransform() {
+        if (videoWrapper) {
+            videoWrapper.style.transform = 'none';
+            videoWrapper.style.transformOrigin = 'center';
+        }
+    }
+
+    function toggleMappingTransform() {
+        mappingEnabled = document.getElementById('show-mapping').checked;
+        updateMappingVisualization();
     }
 
     // Load network info

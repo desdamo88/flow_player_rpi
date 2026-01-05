@@ -89,6 +89,10 @@ class Config:
     web_host: str = "0.0.0.0"
     web_port: int = 5000
 
+    # Logging - WARNING by default for production (less CPU usage)
+    # Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
+    log_level: str = "WARNING"
+
     _config_file: Path = field(default=None, repr=False)
     _state_file: Path = field(default=None, repr=False)
 
@@ -144,7 +148,7 @@ class Config:
             self.monitoring = MonitoringConfig(**data["monitoring"])
 
         # Simple fields
-        for key in ["active_show_id", "active_scene_id", "autoplay", "loop", "web_host", "web_port"]:
+        for key in ["active_show_id", "active_scene_id", "autoplay", "loop", "web_host", "web_port", "log_level"]:
             if key in data:
                 setattr(self, key, data[key])
 
@@ -159,6 +163,7 @@ class Config:
             f"{prefix}DMX_MODE": ("dmx.mode", str),
             f"{prefix}DMX_IP": ("dmx.ip", str),
             f"{prefix}DMX_UNIVERSE": ("dmx.universe", int),
+            f"{prefix}LOG_LEVEL": ("log_level", str),
         }
 
         for env_var, (attr_path, type_fn) in env_mappings.items():

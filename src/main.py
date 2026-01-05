@@ -16,12 +16,22 @@ from src.flow_player import FlowPlayer
 from src.web.app import create_app
 
 
-def setup_logging(log_path: Path, debug: bool = False):
-    """Configure logging"""
+def setup_logging(log_path: Path, log_level: str = "WARNING", debug: bool = False):
+    """Configure logging
+
+    Args:
+        log_path: Directory for log files
+        log_level: Log level from config (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+        debug: Override to DEBUG if True (for --debug flag)
+    """
     log_path.mkdir(parents=True, exist_ok=True)
     log_file = log_path / "flow-player.log"
 
-    level = logging.DEBUG if debug else logging.INFO
+    # Debug flag overrides config
+    if debug:
+        level = logging.DEBUG
+    else:
+        level = getattr(logging, log_level.upper(), logging.WARNING)
 
     # Configure root logger
     logging.basicConfig(
@@ -33,9 +43,10 @@ def setup_logging(log_path: Path, debug: bool = False):
         ]
     )
 
-    # Reduce noise from libraries
+    # Reduce noise from libraries (always WARNING or higher)
     logging.getLogger('werkzeug').setLevel(logging.WARNING)
     logging.getLogger('urllib3').setLevel(logging.WARNING)
+    logging.getLogger('mpv').setLevel(logging.WARNING)
 
 
 def main():
@@ -60,13 +71,14 @@ def main():
     if args.host:
         config.web_host = args.host
 
-    # Setup logging
-    setup_logging(config.logs_path, args.debug)
+    # Setup logging (use config level, --debug overrides to DEBUG)
+    setup_logging(config.logs_path, config.log_level, args.debug)
     logger = logging.getLogger(__name__)
 
-    logger.info("=" * 60)
-    logger.info("Flow Player starting...")
-    logger.info("=" * 60)
+    logger.warning("=" * 60)
+    logger.warning("Flow Player starting...")
+    logger.warning(f"Log level: {config.log_level} (debug={args.debug})")
+    logger.warning("=" * 60)
 
     # Create player
     player = FlowPlayer(config)
