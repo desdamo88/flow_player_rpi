@@ -2,21 +2,30 @@
 
 import logging
 import threading
-from typing import Optional, Callable, Dict, Any, List
+import tempfile
+from typing import Optional, Callable, Dict, Any, List, Union
 from pathlib import Path
 from dataclasses import dataclass
 
 from ..core.config import VideoConfig, AudioConfig
 from ..core.exceptions import VideoPlayerError, MediaNotFoundError
+from ..core.video_mapping import (
+    VideoMappingEngine,
+    create_mapping_from_project_config,
+    PerspectivePoints,
+    MeshGridData,
+    SoftEdgeConfig,
+    Point2D,
+)
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class VideoMapping:
-    """Video mapping configuration (corner pin)"""
+    """Video mapping configuration (corner pin) - Legacy format"""
     enabled: bool = False
-    mode: str = "perspective"  # perspective, corner_pin
+    mode: str = "perspective"  # perspective, mesh
     top_left: tuple = (0.0, 0.0)
     top_right: tuple = (1.0, 0.0)
     bottom_left: tuple = (0.0, 1.0)
@@ -25,7 +34,12 @@ class VideoMapping:
 
 
 class VideoPlayer:
-    """MPV-based video player with mapping support"""
+    """MPV-based video player with mapping support
+
+    Supports both perspective (4-corner homography) and mesh (grid warping)
+    modes for video projection mapping. Uses GPU acceleration via
+    OpenGL shaders when available.
+    """
 
     def __init__(self, video_config: VideoConfig, audio_config: AudioConfig):
         self.video_config = video_config
@@ -38,8 +52,10 @@ class VideoPlayer:
         self._loop = False
         self._current_file: Optional[Path] = None
 
-        # Mapping
+        # Mapping - supports both legacy VideoMapping and new VideoMappingEngine
         self._mapping: Optional[VideoMapping] = None
+        self._mapping_engine: Optional[VideoMappingEngine] = None
+        self._shader_dir: Optional[Path] = None  # Temp dir for shader files
 
         # Callbacks
         self._on_end_file: Optional[Callable] = None
@@ -134,12 +150,16 @@ class VideoPlayer:
         else:
             logger.debug(f"MPV [{component}]: {message}")
 
-    def load(self, file_path: Path, mapping: Optional[VideoMapping] = None) -> bool:
+    def load(self, file_path: Path, mapping: Optional[Union[VideoMapping, Any]] = None) -> bool:
         """Load a video file
 
         Args:
             file_path: Path to the video file
             mapping: Optional video mapping configuration
+                     Can be VideoMapping (legacy) or VideoMappingConfig from project_loader
+
+        Returns:
+            True if loaded successfully
         """
         if not self._initialized:
             raise VideoPlayerError("Video player not initialized")
@@ -149,28 +169,42 @@ class VideoPlayer:
             raise MediaNotFoundError(f"Video file not found: {file_path}")
 
         self._current_file = file_path
-        self._mapping = mapping
         self._loop_count = 0
 
-        # Apply mapping if enabled
-        if mapping and mapping.enabled:
-            self._apply_mapping(mapping)
+        # Handle mapping configuration
+        if mapping:
+            if isinstance(mapping, VideoMapping):
+                # Legacy VideoMapping format
+                self._mapping = mapping
+                self._mapping_engine = None
+                if mapping.enabled:
+                    self._apply_mapping(mapping)
+            else:
+                # New VideoMappingConfig from project_loader
+                self._mapping = None
+                self._mapping_engine = create_mapping_from_project_config(mapping)
+                if self._mapping_engine and self._mapping_engine.is_deformed():
+                    self._apply_mapping_engine()
+        else:
+            self._mapping = None
+            self._mapping_engine = None
+            # Clear any previous video filters
+            if self._mpv:
+                try:
+                    self._mpv.vf = ""
+                except Exception:
+                    pass
 
         logger.info(f"Video loaded: {file_path}")
         return True
 
     def _apply_mapping(self, mapping: VideoMapping):
-        """Apply video mapping transformation using MPV's video filters"""
+        """Apply video mapping transformation using MPV's video filters (legacy)"""
         if not self._mpv:
             return
 
         if mapping.mode == "perspective":
-            # Use perspective transformation
-            # MPV doesn't have native corner pin, so we use perspective transform
-            # This requires the vf 'perspective' filter or custom shader
-
-            # Calculate perspective matrix from corner points
-            # For now, we'll use a simplified approach with lavfi perspective filter
+            # Use perspective transformation via lavfi filter
             tl = mapping.top_left
             tr = mapping.top_right
             bl = mapping.bottom_left
@@ -184,7 +218,7 @@ class VideoPlayer:
                 f"{tl[0]}*W:{tl[1]}*H:"
                 f"{tr[0]}*W:{tr[1]}*H:"
                 f"{bl[0]}*W:{bl[1]}*H:"
-                f"{br[0]}*W:{br[1]}*H]"
+                f"{br[0]}*W:{br[1]}*H:interpolation=linear]"
             )
 
             try:
@@ -192,6 +226,141 @@ class VideoPlayer:
                 logger.info(f"Applied video mapping: {mapping.mode}")
             except Exception as e:
                 logger.warning(f"Failed to apply video mapping: {e}")
+
+    def _apply_mapping_engine(self):
+        """Apply video mapping using VideoMappingEngine
+
+        Supports both perspective and mesh modes with GPU acceleration.
+        Falls back to FFmpeg filters if shaders aren't supported.
+        """
+        if not self._mpv or not self._mapping_engine:
+            return
+
+        engine = self._mapping_engine
+        mode = engine.mode
+
+        # Try to use shaders first for better quality and performance
+        if self._try_apply_shader_mapping():
+            logger.info(f"Applied {mode} mapping via GPU shader")
+            return
+
+        # Fallback to FFmpeg filter
+        try:
+            # Get video dimensions (estimate from target resolution or default)
+            width = engine.target_resolution.get('width', 1920)
+            height = engine.target_resolution.get('height', 1080)
+
+            vf_str = engine.generate_mpv_vf(width, height)
+            if vf_str:
+                self._mpv.vf = vf_str
+                logger.info(f"Applied {mode} mapping via FFmpeg filter")
+            else:
+                logger.warning("No mapping filter generated")
+        except Exception as e:
+            logger.warning(f"Failed to apply video mapping: {e}")
+
+    def _try_apply_shader_mapping(self) -> bool:
+        """Try to apply mapping via custom GLSL shader
+
+        Returns:
+            True if shader was applied successfully
+        """
+        if not self._mapping_engine:
+            return False
+
+        try:
+            # Create temporary directory for shader files
+            import tempfile
+            import os
+
+            if not self._shader_dir:
+                self._shader_dir = Path(tempfile.mkdtemp(prefix='flow_shaders_'))
+
+            # Generate and write warp shader
+            shader_content = self._mapping_engine.generate_glsl_shader()
+            if not shader_content:
+                return False
+
+            warp_shader_path = self._shader_dir / 'warp.glsl'
+            with open(warp_shader_path, 'w') as f:
+                f.write(shader_content)
+
+            # Generate and write soft edge shader if enabled
+            soft_edge_shader = self._mapping_engine.generate_soft_edge_shader()
+            shader_files = [str(warp_shader_path)]
+
+            if soft_edge_shader:
+                soft_edge_path = self._shader_dir / 'soft_edge.glsl'
+                with open(soft_edge_path, 'w') as f:
+                    f.write(soft_edge_shader)
+                shader_files.append(str(soft_edge_path))
+
+            # Apply shaders to MPV
+            # Note: This requires MPV compiled with gpu-next or gpu vo
+            glsl_shaders = ':'.join(shader_files)
+            self._mpv['glsl-shaders'] = glsl_shaders
+
+            logger.debug(f"Applied custom shaders: {shader_files}")
+            return True
+
+        except Exception as e:
+            logger.debug(f"Shader mapping not available: {e}")
+            return False
+
+    def set_mapping(self, mapping_config) -> bool:
+        """Update video mapping at runtime
+
+        Args:
+            mapping_config: VideoMappingConfig from project_loader
+
+        Returns:
+            True if mapping was applied
+        """
+        if not mapping_config:
+            # Clear mapping
+            self._mapping_engine = None
+            if self._mpv:
+                try:
+                    self._mpv.vf = ""
+                    self._mpv['glsl-shaders'] = ""
+                except Exception:
+                    pass
+            return True
+
+        self._mapping_engine = create_mapping_from_project_config(mapping_config)
+
+        if self._mapping_engine and self._mapping_engine.is_deformed():
+            self._apply_mapping_engine()
+            return True
+
+        return False
+
+    def get_mapping_info(self) -> Dict[str, Any]:
+        """Get current mapping information
+
+        Returns:
+            Dict with mapping mode, deformation status, etc.
+        """
+        if self._mapping_engine:
+            return {
+                'enabled': True,
+                'mode': self._mapping_engine.mode,
+                'is_deformed': self._mapping_engine.is_deformed(),
+                'using_shader': self._shader_dir is not None,
+            }
+        elif self._mapping:
+            return {
+                'enabled': self._mapping.enabled,
+                'mode': self._mapping.mode,
+                'is_deformed': True,  # Legacy always assumes deformed if enabled
+                'using_shader': False,
+            }
+        return {
+            'enabled': False,
+            'mode': None,
+            'is_deformed': False,
+            'using_shader': False,
+        }
 
     def play(self, loop: bool = False):
         """Start or resume video playback
@@ -333,7 +502,7 @@ class VideoPlayer:
             return None
 
     def shutdown(self):
-        """Shutdown video player"""
+        """Shutdown video player and cleanup resources"""
         if self._mpv:
             try:
                 self._mpv.stop()
@@ -342,6 +511,17 @@ class VideoPlayer:
                 logger.error(f"Error shutting down MPV: {e}")
             self._mpv = None
 
+        # Cleanup shader temporary directory
+        if self._shader_dir and self._shader_dir.exists():
+            try:
+                import shutil
+                shutil.rmtree(self._shader_dir)
+                logger.debug(f"Cleaned up shader dir: {self._shader_dir}")
+            except Exception as e:
+                logger.warning(f"Failed to cleanup shader dir: {e}")
+            self._shader_dir = None
+
+        self._mapping_engine = None
         self._initialized = False
         self._playing = False
         logger.info("Video player shutdown complete")

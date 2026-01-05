@@ -109,18 +109,13 @@ class ScenePlayer:
                     video_path = Path(video_path)
 
                 if video_path.exists():
-                    # Get video mapping from project
-                    mapping = None
-                    if self.project.video_mapping and self.project.video_mapping.enabled:
-                        from ..players.video_player import VideoMapping
-                        mapping = VideoMapping(
-                            enabled=True,
-                            mode=self.project.video_mapping.mode,
-                            top_left=self.project.video_mapping.top_left,
-                            top_right=self.project.video_mapping.top_right,
-                            bottom_left=self.project.video_mapping.bottom_left,
-                            bottom_right=self.project.video_mapping.bottom_right,
-                        )
+                    # Get video mapping for this scene (scene-specific or global)
+                    # Pass the VideoMappingConfig directly - the player handles both formats
+                    mapping = self.project.get_scene_mapping(self.scene.id)
+
+                    if mapping and mapping.enabled:
+                        logger.info(f"Video mapping enabled: mode={mapping.mode}, deformed={mapping.is_deformed()}")
+
                     self._video_player.load(video_path, mapping)
                     logger.info(f"Video loaded: {video_path}")
                 else:

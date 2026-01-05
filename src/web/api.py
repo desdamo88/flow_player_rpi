@@ -585,4 +585,81 @@ def create_api_blueprint() -> Blueprint:
             logger.error(f"DMX test error: {e}")
             return api_response(False, error=str(e), status_code=500)
 
+    # ==================== VIDEO MAPPING ====================
+
+    @api.route('/mapping', methods=['GET'])
+    @require_player
+    def get_mapping():
+        """Get current video mapping configuration and status"""
+        player = get_player()
+
+        try:
+            result = {
+                "enabled": False,
+                "mode": None,
+                "is_deformed": False,
+                "using_shader": False,
+                "project_mapping": None,
+                "scene_mapping": None,
+            }
+
+            # Get project-level mapping info
+            if player.current_project:
+                project_info = player.get_project_info()
+                result["project_mapping"] = project_info.get("video_mapping")
+                result["all_mappings"] = project_info.get("video_mappings", [])
+
+            # Get current scene mapping
+            if player.current_scene and player.current_project:
+                scene_mapping = player.current_project.get_scene_mapping(player.current_scene.id)
+                if scene_mapping:
+                    result["scene_mapping"] = scene_mapping.to_dict()
+                    result["enabled"] = scene_mapping.enabled
+                    result["mode"] = scene_mapping.mode
+                    result["is_deformed"] = scene_mapping.is_deformed()
+
+            # Get video player mapping status
+            if player.video_player:
+                mapping_info = player.video_player.get_mapping_info()
+                result.update({
+                    "player_enabled": mapping_info.get("enabled", False),
+                    "using_shader": mapping_info.get("using_shader", False),
+                })
+
+            return jsonify(result)
+        except Exception as e:
+            logger.error(f"Get mapping error: {e}")
+            return api_response(False, error=str(e), status_code=500)
+
+    @api.route('/scenes/<scene_id>/mapping', methods=['GET'])
+    @require_player
+    def get_scene_mapping(scene_id):
+        """Get video mapping configuration for a specific scene"""
+        player = get_player()
+
+        try:
+            if not player.current_project:
+                return api_response(False, error="No project loaded", status_code=404)
+
+            scene = player.current_project.get_scene(scene_id)
+            if not scene:
+                return api_response(False, error="Scene not found", status_code=404)
+
+            # Get mapping for this scene
+            mapping = player.current_project.get_scene_mapping(scene_id)
+
+            if mapping:
+                return jsonify({
+                    "scene_id": scene_id,
+                    "mapping": mapping.to_dict()
+                })
+            else:
+                return jsonify({
+                    "scene_id": scene_id,
+                    "mapping": None
+                })
+        except Exception as e:
+            logger.error(f"Get scene mapping error: {e}")
+            return api_response(False, error=str(e), status_code=500)
+
     return api
