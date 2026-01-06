@@ -3,13 +3,17 @@
 import time
 import logging
 import threading
-from typing import Optional, Dict, Any, List, Callable
+from typing import Optional, Dict, Any, List, Callable, TYPE_CHECKING
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
 from .project_loader import Project, Scene, DMXSequence
 from .utils import interpolate_value
+
+if TYPE_CHECKING:
+    from .dmx_scene_link import DMXSceneLinkManager, SceneRecordingLink
+    from .dmx_recorder import DMXRecording, DMXRecordingPlayer
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +70,12 @@ class ScenePlayer:
         self._video_player = None
         self._dmx_player = None
 
+        # DMX Recording link support
+        self._dmx_link_manager: Optional["DMXSceneLinkManager"] = None
+        self._dmx_recording: Optional["DMXRecording"] = None
+        self._dmx_recording_link: Optional["SceneRecordingLink"] = None
+        self._recordings_path: Optional[Path] = None
+
         # Sync thread
         self._running = False
         self._sync_thread: Optional[threading.Thread] = None
@@ -87,6 +97,11 @@ class ScenePlayer:
         """Inject DMX player"""
         self._dmx_player = player
 
+    def set_dmx_link_manager(self, manager: "DMXSceneLinkManager", recordings_path: Path):
+        """Set DMX link manager and recordings path for recording playback"""
+        self._dmx_link_manager = manager
+        self._recordings_path = recordings_path
+
     def load(self) -> bool:
         """Load scene resources"""
         self._set_state(SceneState.LOADING)
@@ -100,6 +115,25 @@ class ScenePlayer:
             self._dmx_sequence = self.project.get_scene_dmx_sequence(self.scene)
             if self._dmx_sequence:
                 logger.info(f"Scene '{self.scene.name}': DMX sequence '{self._dmx_sequence.name}'")
+
+            # Check for linked DMX recording
+            self._dmx_recording = None
+            self._dmx_recording_link = None
+            if self._dmx_link_manager and self._recordings_path:
+                link = self._dmx_link_manager.get_link(self.scene.id)
+                if link and link.enabled:
+                    self._dmx_recording_link = link
+                    # Load the recording
+                    recording_path = self._recordings_path / f"{link.recording_name}.dmxr"
+                    if recording_path.exists():
+                        from .dmx_recorder import DMXRecording
+                        self._dmx_recording = DMXRecording.load(recording_path)
+                        if self._dmx_recording:
+                            logger.info(f"Scene '{self.scene.name}': DMX recording '{link.recording_name}' loaded (mode: {link.mode})")
+                        else:
+                            logger.warning(f"Failed to load DMX recording: {recording_path}")
+                    else:
+                        logger.warning(f"DMX recording file not found: {recording_path}")
 
             # Load video into player
             video_media = self._get_primary_video()
@@ -296,7 +330,47 @@ class ScenePlayer:
                 time.sleep(sleep_time)
 
     def _update_dmx(self, elapsed_sec: float):
-        """Update DMX output based on sequence keyframes"""
+        """Update DMX output based on sequence keyframes and/or linked recording"""
+        # Determine playback mode
+        mode = self._dmx_recording_link.mode if self._dmx_recording_link else "project_only"
+
+        # Handle "project_only" mode - skip recording entirely
+        if mode == "project_only" or not self._dmx_recording:
+            self._update_dmx_from_sequence(elapsed_sec)
+            return
+
+        # Handle "recording_only" mode - skip sequence entirely
+        if mode == "recording_only":
+            self._update_dmx_from_recording(elapsed_sec)
+            return
+
+        # Handle blend modes (recording_priority or blend/HTP)
+        project_channels = self._get_dmx_from_sequence(elapsed_sec)
+        recording_channels = self._get_dmx_from_recording(elapsed_sec)
+
+        if project_channels is None and recording_channels is None:
+            return
+
+        # Ensure both have 512 channels
+        if project_channels is None:
+            project_channels = [0] * 512
+        if recording_channels is None:
+            recording_channels = [0] * 512
+
+        # Pad to 512 if needed
+        project_channels = list(project_channels) + [0] * (512 - len(project_channels))
+        recording_channels = list(recording_channels) + [0] * (512 - len(recording_channels))
+
+        # Blend according to mode
+        from .dmx_scene_link import blend_dmx_frames
+        blended = blend_dmx_frames(project_channels[:512], recording_channels[:512], mode)
+
+        # Output blended frame
+        if self._dmx_player and blended:
+            self._dmx_player.set_channels(1, blended)
+
+    def _update_dmx_from_sequence(self, elapsed_sec: float):
+        """Update DMX output from project sequence only"""
         seq = self._dmx_sequence
         if not seq or not seq.keyframes:
             return
@@ -327,6 +401,62 @@ class ScenePlayer:
                 # For now, output directly starting at channel 1
                 # TODO: Map fixture to actual DMX channels via fixture config
                 self._dmx_player.set_channels(1, values)
+
+    def _update_dmx_from_recording(self, elapsed_sec: float):
+        """Update DMX output from linked recording only"""
+        channels = self._get_dmx_from_recording(elapsed_sec)
+        if channels and self._dmx_player:
+            self._dmx_player.set_channels(1, channels)
+
+    def _get_dmx_from_sequence(self, elapsed_sec: float) -> Optional[List[int]]:
+        """Get current DMX values from project sequence"""
+        seq = self._dmx_sequence
+        if not seq or not seq.keyframes:
+            return None
+
+        # Apply speed multiplier
+        elapsed_sec *= seq.speed
+
+        # Handle sequence loop
+        if seq.loop and seq.duration > 0 and elapsed_sec > seq.duration:
+            elapsed_sec = elapsed_sec % seq.duration
+
+        # Get all channels combined from all fixtures
+        all_values = [0] * 512
+
+        # Group keyframes by fixture
+        fixture_keyframes: Dict[str, List[Dict]] = {}
+        for kf in seq.keyframes:
+            fixture_id = kf.get('fixtureId', 'default')
+            if fixture_id not in fixture_keyframes:
+                fixture_keyframes[fixture_id] = []
+            fixture_keyframes[fixture_id].append(kf)
+
+        # Sort and interpolate each fixture
+        for fixture_id, keyframes in fixture_keyframes.items():
+            keyframes.sort(key=lambda x: x.get('time', 0))
+            values = self._interpolate_keyframes(keyframes, elapsed_sec, seq.interpolation)
+            if values:
+                # Apply values starting at channel 0
+                for i, v in enumerate(values[:512]):
+                    all_values[i] = max(all_values[i], v)  # HTP for overlapping
+
+        return all_values
+
+    def _get_dmx_from_recording(self, elapsed_sec: float) -> Optional[List[int]]:
+        """Get current DMX values from linked recording"""
+        if not self._dmx_recording:
+            return None
+
+        # Apply offset from link
+        offset_sec = 0
+        if self._dmx_recording_link:
+            offset_sec = self._dmx_recording_link.offset_ms / 1000.0
+
+        elapsed_ms = int((elapsed_sec + offset_sec) * 1000)
+
+        # Get frame from recording (respects trim points)
+        return self._dmx_recording.get_frame_at_time(elapsed_ms)
 
     def _interpolate_keyframes(
         self,

@@ -12,24 +12,66 @@ Lecteur autonome vidéo/audio/DMX pour Raspberry Pi 5, conçu pour lire les expo
 - **Persistance** : restauration automatique après redémarrage
 - **Planification** : lecture programmée horaire/quotidienne
 
-## Installation rapide
+## Installation sur Raspberry Pi 5
 
-Sur un Raspberry Pi avec Raspberry Pi OS Lite (Bookworm) :
+### Prérequis
+
+- Raspberry Pi 5 (4GB ou 8GB recommandé)
+- Raspberry Pi OS Lite 64-bit (Bookworm)
+- Carte SD 32GB minimum (classe A2 recommandée)
+- Connexion réseau (Ethernet ou WiFi)
+
+### Méthode 1 : Installation rapide (télécharger puis exécuter)
+
+```bash
+# Télécharger le script d'installation
+cd /tmp
+curl -sSL https://raw.githubusercontent.com/desdamo88/flow_player_rpi/main/scripts/quick-install.sh -o install.sh
+
+# Vérifier que le fichier est correct (doit afficher #!/bin/bash)
+head -3 install.sh
+
+# Exécuter l'installation
+sudo bash install.sh
+```
+
+### Méthode 2 : Installation en une ligne
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/desdamo88/flow_player_rpi/main/scripts/quick-install.sh | sudo bash
 ```
 
-## Installation manuelle
+### Méthode 3 : Installation manuelle
 
 ```bash
-# Cloner le dépôt
-sudo git clone https://github.com/desdamo88/flow_player_rpi.git /opt/flow-player
+# 1. Installer les dépendances système
+sudo apt update
+sudo apt install -y python3-venv python3-pip python3-dev mpv libmpv-dev git avahi-daemon
 
-# Lancer l'installation
+# 2. Cloner le dépôt
+sudo git clone https://github.com/desdamo88/flow_player_rpi.git /opt/flow-player
+sudo chown -R $USER:$USER /opt/flow-player
+
+# 3. Créer l'environnement Python
 cd /opt/flow-player
-sudo ./install.sh
+python3 -m venv venv
+./venv/bin/pip install -r requirements.txt
+
+# 4. Installer et démarrer le service
+sudo cp systemd/flow-player.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable flow-player
+sudo systemctl start flow-player
+
+# 5. Vérifier l'installation
+curl http://localhost:5000/api/health
 ```
+
+### Après l'installation
+
+- **Interface web** : `http://[IP_DU_RPI]:5000` ou `http://flowplayer.local:5000`
+- **Importer un show** : Page Shows → Importer un fichier `.zip` Flow Studio
+- **Documentation complète** : Voir [docs/INSTALLATION_RPI5.md](docs/INSTALLATION_RPI5.md)
 
 ## Mode développement (Ubuntu/Linux)
 

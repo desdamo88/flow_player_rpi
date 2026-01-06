@@ -407,9 +407,20 @@
             bl = points[rows]?.[0] || {x: 0, y: 1};
             br = points[rows]?.[cols] || {x: 1, y: 1};
 
+            // Check if corners are deformed (not at default positions)
+            const cornersDeformed = (
+                tl.x !== 0 || tl.y !== 0 ||
+                tr.x !== 1 || tr.y !== 0 ||
+                bl.x !== 0 || bl.y !== 1 ||
+                br.x !== 1 || br.y !== 1
+            );
+
             infoHtml += ` (${rows}x${cols})`;
             if (currentMapping.is_deformed) {
                 infoHtml += ' <span class="badge deformed">Déformé</span>';
+                if (!cornersDeformed) {
+                    infoHtml += ' <small style="opacity:0.7">(déformation interne uniquement)</small>';
+                }
             }
         } else {
             // Perspective mode - use direct points

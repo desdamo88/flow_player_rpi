@@ -60,6 +60,9 @@ class MonitoringConfig:
     heartbeat_url: str = ""
     heartbeat_interval_sec: int = 30
     webhook_url: str = ""
+    # Monitoring API
+    api_enabled: bool = True
+    api_key: str = ""  # Empty = no auth required
 
 
 @dataclass

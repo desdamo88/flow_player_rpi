@@ -170,11 +170,14 @@ body {
     aspect-ratio: 16/9;
     background: #000;
     border-radius: 8px;
-    overflow: hidden;
+    overflow: visible; /* Changed from hidden to allow perspective transform to be visible */
     display: flex;
     align-items: center;
     justify-content: center;
     margin-bottom: 1.5rem;
+    /* Enable 3D perspective for child transforms */
+    perspective: 1000px;
+    perspective-origin: center center;
 }
 
 .player-preview-container {

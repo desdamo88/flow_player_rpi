@@ -72,6 +72,11 @@ def create_app(player: "FlowPlayer" = None) -> Flask:
         """Logs page"""
         return render_template('logs.html')
 
+    @app.route('/dmx-recorder')
+    def dmx_recorder():
+        """DMX Recorder page"""
+        return render_template('dmx_recorder.html')
+
     # Serve media thumbnails
     @app.route('/thumbnails/<path:filename>')
     def serve_thumbnail(filename):

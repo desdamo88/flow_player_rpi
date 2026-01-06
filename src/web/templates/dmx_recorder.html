@@ -1,0 +1,1241 @@
+{% extends "base.html" %}
+
+{% block title %}DMX Recorder - Flow Player{% endblock %}
+
+{% block content %}
+<div class="recorder-page">
+    <!-- Recording Section -->
+    <div class="card recorder-card">
+        <h2>DMX Recorder</h2>
+        <p class="subtitle">Enregistrez les données Art-Net de votre console lumière</p>
+
+        <div class="recorder-status" id="recorder-status">
+            <div class="status-indicator" id="status-indicator">
+                <span class="status-dot"></span>
+                <span class="status-text">Inactif</span>
+            </div>
+            <div class="status-details" id="status-details"></div>
+        </div>
+
+        <div class="recorder-controls">
+            <div class="control-group">
+                <label>Universe Art-Net</label>
+                <input type="number" id="record-universe" value="0" min="0" max="32767">
+            </div>
+            <div class="control-group">
+                <label>Nom de l'enregistrement</label>
+                <input type="text" id="record-name" placeholder="Ma séquence lumière">
+            </div>
+        </div>
+
+        <div class="recorder-buttons">
+            <button id="btn-listen" class="btn btn-secondary" onclick="toggleListening()">
+                <span class="icon">📡</span> Écouter Art-Net
+            </button>
+            <button id="btn-record" class="btn btn-danger" onclick="toggleRecording()" disabled>
+                <span class="icon">⏺</span> Enregistrer
+            </button>
+        </div>
+
+        <div class="recording-info" id="recording-info" style="display: none;">
+            <div class="recording-timer">
+                <span class="timer-icon">⏱</span>
+                <span id="recording-duration">00:00.0</span>
+            </div>
+            <div class="recording-frames">
+                <span id="recording-frames">0</span> frames
+            </div>
+        </div>
+    </div>
+
+    <!-- Recordings List -->
+    <div class="card recordings-card">
+        <div class="card-header">
+            <h2>Enregistrements</h2>
+            <button class="btn btn-sm" onclick="refreshRecordings()">🔄 Rafraîchir</button>
+        </div>
+
+        <div id="recordings-list" class="recordings-list">
+            <p class="loading">Chargement...</p>
+        </div>
+    </div>
+
+    <!-- Editor Modal -->
+    <div id="editor-modal" class="modal" style="display: none;">
+        <div class="modal-content editor-modal">
+            <div class="modal-header">
+                <h3 id="editor-title">Éditer l'enregistrement</h3>
+                <button class="modal-close" onclick="closeEditor()">&times;</button>
+            </div>
+
+            <div class="editor-body">
+                <!-- Waveform / Timeline -->
+                <div class="timeline-container">
+                    <div class="timeline-header">
+                        <span id="trim-start-display">00:00.0</span>
+                        <span class="timeline-duration" id="timeline-duration">Durée: 00:00.0</span>
+                        <span id="trim-end-display">00:00.0</span>
+                    </div>
+                    <div class="timeline-track" id="timeline-track">
+                        <div class="timeline-fill" id="timeline-fill"></div>
+                        <div class="trim-handle trim-start" id="trim-start-handle"></div>
+                        <div class="trim-handle trim-end" id="trim-end-handle"></div>
+                        <div class="playhead" id="playhead"></div>
+                    </div>
+                    <div class="timeline-markers">
+                        <span>0s</span>
+                        <span id="timeline-mid"></span>
+                        <span id="timeline-end"></span>
+                    </div>
+                </div>
+
+                <!-- Trim Controls -->
+                <div class="trim-controls">
+                    <div class="trim-input">
+                        <label>Début (ms)</label>
+                        <input type="number" id="trim-start-input" value="0" min="0" onchange="updateTrimFromInput()">
+                    </div>
+                    <div class="trim-input">
+                        <label>Fin (ms)</label>
+                        <input type="number" id="trim-end-input" value="0" min="0" onchange="updateTrimFromInput()">
+                    </div>
+                    <div class="trim-info">
+                        <label>Durée finale</label>
+                        <span id="trimmed-duration">00:00.0</span>
+                    </div>
+                </div>
+
+                <!-- Video Sync Section -->
+                <div class="sync-section">
+                    <h4>Synchroniser avec une scène</h4>
+                    <div class="sync-controls">
+                        <select id="sync-scene-select">
+                            <option value="">-- Sélectionner une scène --</option>
+                        </select>
+                        <select id="sync-mode-select">
+                            <option value="recording_priority">Enregistrement prioritaire</option>
+                            <option value="recording_only">Enregistrement uniquement</option>
+                            <option value="project_only">Séquence projet uniquement</option>
+                            <option value="blend">Fusion HTP (max des deux)</option>
+                        </select>
+                    </div>
+                    <div class="sync-controls" style="margin-top: 0.5rem;">
+                        <div class="offset-input">
+                            <label>Décalage (ms)</label>
+                            <input type="number" id="sync-offset" value="0" min="-10000" max="10000" step="100">
+                        </div>
+                        <button class="btn btn-primary btn-sm" onclick="linkToScene()">🔗 Lier à la scène</button>
+                        <button class="btn btn-secondary btn-sm" id="btn-unlink" onclick="unlinkFromScene()" style="display: none;">❌ Délier</button>
+                    </div>
+                    <div id="link-status" class="link-status" style="display: none;">
+                        <span class="link-badge">🔗 Lié</span>
+                        <span class="link-info"></span>
+                    </div>
+                    <p class="sync-hint">
+                        <strong>Modes:</strong><br>
+                        • <em>Enregistrement prioritaire</em>: L'enregistrement remplace les canaux non-zéro du projet<br>
+                        • <em>Enregistrement uniquement</em>: Seul l'enregistrement est joué<br>
+                        • <em>Séquence projet</em>: Ignore l'enregistrement, joue la séquence du projet<br>
+                        • <em>Fusion HTP</em>: Prend la valeur max entre projet et enregistrement
+                    </p>
+                </div>
+
+                <!-- Preview Controls -->
+                <div class="preview-controls">
+                    <button class="btn btn-secondary" onclick="previewRecording()">
+                        <span class="icon">▶</span> Prévisualiser
+                    </button>
+                    <button class="btn btn-secondary" onclick="stopPreview()">
+                        <span class="icon">⏹</span> Stop
+                    </button>
+                </div>
+            </div>
+
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeEditor()">Annuler</button>
+                <button class="btn btn-primary" onclick="saveRecording()">💾 Sauvegarder</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+.recorder-page {
+    padding: 1rem;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+    max-width: 1400px;
+    margin: 0 auto;
+}
+
+@media (max-width: 900px) {
+    .recorder-page {
+        grid-template-columns: 1fr;
+    }
+}
+
+.recorder-card {
+    background: var(--card-bg);
+    border-radius: 12px;
+    padding: 1.5rem;
+}
+
+.recorder-card h2 {
+    margin: 0 0 0.25rem 0;
+    color: var(--text-primary);
+}
+
+.subtitle {
+    color: var(--text-secondary);
+    margin: 0 0 1.5rem 0;
+    font-size: 0.9rem;
+}
+
+.recorder-status {
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    padding: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.status-indicator {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: 500;
+}
+
+.status-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--text-secondary);
+}
+
+.status-dot.listening {
+    background: #f59e0b;
+    animation: pulse 2s infinite;
+}
+
+.status-dot.recording {
+    background: #ef4444;
+    animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+.status-details {
+    margin-top: 0.5rem;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.recorder-controls {
+    display: grid;
+    grid-template-columns: 1fr 2fr;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.control-group label {
+    display: block;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    margin-bottom: 0.25rem;
+}
+
+.control-group input {
+    width: 100%;
+    padding: 0.5rem;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+}
+
+.recorder-buttons {
+    display: flex;
+    gap: 1rem;
+}
+
+.recorder-buttons .btn {
+    flex: 1;
+    padding: 1rem;
+    font-size: 1rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+}
+
+.btn-danger {
+    background: #ef4444;
+    color: white;
+}
+
+.btn-danger:hover:not(:disabled) {
+    background: #dc2626;
+}
+
+.btn-danger:disabled {
+    background: #6b7280;
+    cursor: not-allowed;
+}
+
+.btn.recording {
+    background: #ef4444;
+    animation: recording-pulse 1s infinite;
+}
+
+@keyframes recording-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+    50% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
+}
+
+.recording-info {
+    margin-top: 1.5rem;
+    padding: 1rem;
+    background: rgba(239, 68, 68, 0.1);
+    border-radius: 8px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.recording-timer {
+    font-size: 2rem;
+    font-weight: bold;
+    font-family: monospace;
+    color: #ef4444;
+}
+
+.recording-frames {
+    color: var(--text-secondary);
+}
+
+/* Recordings List */
+.recordings-card {
+    background: var(--card-bg);
+    border-radius: 12px;
+    padding: 1.5rem;
+}
+
+.card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+.card-header h2 {
+    margin: 0;
+}
+
+.recordings-list {
+    max-height: 500px;
+    overflow-y: auto;
+}
+
+.recording-item {
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    padding: 1rem;
+    margin-bottom: 0.75rem;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.recording-item:hover {
+    background: var(--bg-hover);
+}
+
+.recording-item-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+}
+
+.recording-name {
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.recording-meta {
+    display: flex;
+    gap: 1rem;
+    margin-top: 0.5rem;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.recording-actions {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.recording-actions .btn-icon {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.9rem;
+    background: transparent;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.recording-actions .btn-icon:hover {
+    background: var(--bg-hover);
+}
+
+.no-recordings {
+    text-align: center;
+    padding: 2rem;
+    color: var(--text-secondary);
+}
+
+/* Editor Modal */
+.modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.editor-modal {
+    background: var(--card-bg);
+    border-radius: 12px;
+    width: 90%;
+    max-width: 800px;
+    max-height: 90vh;
+    overflow-y: auto;
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.modal-header h3 {
+    margin: 0;
+}
+
+.modal-close {
+    background: none;
+    border: none;
+    font-size: 1.5rem;
+    cursor: pointer;
+    color: var(--text-secondary);
+}
+
+.editor-body {
+    padding: 1.5rem;
+}
+
+.modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 1rem;
+    padding: 1rem 1.5rem;
+    border-top: 1px solid var(--border-color);
+}
+
+/* Timeline */
+.timeline-container {
+    margin-bottom: 1.5rem;
+}
+
+.timeline-header {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 0.5rem;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.timeline-track {
+    position: relative;
+    height: 60px;
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.timeline-fill {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: linear-gradient(90deg,
+        rgba(139, 92, 246, 0.3) 0%,
+        rgba(139, 92, 246, 0.5) 50%,
+        rgba(139, 92, 246, 0.3) 100%);
+}
+
+.trim-handle {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 8px;
+    background: var(--accent-color);
+    cursor: ew-resize;
+    z-index: 10;
+}
+
+.trim-handle::after {
+    content: '⋮';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    color: white;
+    font-size: 12px;
+}
+
+.trim-start {
+    left: 0;
+    border-radius: 4px 0 0 4px;
+}
+
+.trim-end {
+    right: 0;
+    border-radius: 0 4px 4px 0;
+}
+
+.playhead {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: #ef4444;
+    left: 0;
+    z-index: 5;
+    display: none;
+}
+
+.timeline-markers {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 0.25rem;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+/* Trim Controls */
+.trim-controls {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.trim-input label {
+    display: block;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    margin-bottom: 0.25rem;
+}
+
+.trim-input input {
+    width: 100%;
+    padding: 0.5rem;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+}
+
+.trim-info span {
+    font-size: 1.25rem;
+    font-weight: bold;
+    color: var(--accent-color);
+}
+
+/* Sync Section */
+.sync-section {
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    padding: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.sync-section h4 {
+    margin: 0 0 1rem 0;
+}
+
+.sync-controls {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+}
+
+.sync-controls select {
+    flex: 1;
+    padding: 0.5rem;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+}
+
+.sync-hint {
+    margin: 0.75rem 0 0 0;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.sync-hint em {
+    color: var(--accent-color);
+}
+
+.offset-input {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.offset-input label {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+.offset-input input {
+    width: 100px;
+    padding: 0.35rem 0.5rem;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+}
+
+.link-status {
+    margin-top: 0.75rem;
+    padding: 0.5rem;
+    background: rgba(139, 92, 246, 0.1);
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.link-badge {
+    background: var(--accent-color);
+    color: white;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    font-weight: 500;
+}
+
+.link-info {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.recording-link-badge {
+    background: var(--accent-color);
+    color: white;
+    padding: 0.125rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    margin-left: 0.5rem;
+}
+
+.preview-controls {
+    display: flex;
+    gap: 1rem;
+}
+
+.preview-controls .btn {
+    flex: 1;
+}
+
+/* Linked badge */
+.badge-linked {
+    background: var(--accent-color);
+    color: white;
+    padding: 0.125rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+}
+</style>
+
+<script>
+// State
+let isListening = false;
+let isRecording = false;
+let recordingStartTime = null;
+let recordingInterval = null;
+let currentEditRecording = null;
+let scenes = [];
+let sceneLinks = {};  // scene_id -> link info
+
+// Initialize
+document.addEventListener('DOMContentLoaded', () => {
+    refreshStatus();
+    refreshRecordings();
+    loadScenes();
+    loadSceneLinks();
+
+    // Poll status every 2 seconds
+    setInterval(refreshStatus, 2000);
+});
+
+// Format time as mm:ss.d
+function formatTime(ms) {
+    const totalSeconds = ms / 1000;
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = Math.floor(totalSeconds % 60);
+    const tenths = Math.floor((totalSeconds % 1) * 10);
+    return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${tenths}`;
+}
+
+// Refresh recorder status
+async function refreshStatus() {
+    try {
+        const response = await fetch('/api/dmx-recorder/status');
+        const data = await response.json();
+
+        updateStatusUI(data);
+    } catch (error) {
+        console.error('Status error:', error);
+    }
+}
+
+function updateStatusUI(data) {
+    const statusDot = document.querySelector('.status-dot');
+    const statusText = document.querySelector('.status-text');
+    const statusDetails = document.getElementById('status-details');
+    const btnListen = document.getElementById('btn-listen');
+    const btnRecord = document.getElementById('btn-record');
+    const recordingInfo = document.getElementById('recording-info');
+
+    // Update status dot and text
+    statusDot.className = 'status-dot';
+
+    if (data.recording) {
+        statusDot.classList.add('recording');
+        statusText.textContent = 'Enregistrement en cours...';
+        btnRecord.innerHTML = '<span class="icon">⏹</span> Arrêter';
+        btnRecord.classList.add('recording');
+        recordingInfo.style.display = 'flex';
+
+        document.getElementById('recording-duration').textContent = formatTime(data.duration_ms || 0);
+        document.getElementById('recording-frames').textContent = data.frame_count || 0;
+
+        isRecording = true;
+    } else if (data.listening) {
+        statusDot.classList.add('listening');
+        statusText.textContent = 'Écoute Art-Net active';
+        btnListen.innerHTML = '<span class="icon">🔇</span> Arrêter l\'écoute';
+        btnRecord.disabled = false;
+        btnRecord.innerHTML = '<span class="icon">⏺</span> Enregistrer';
+        btnRecord.classList.remove('recording');
+        recordingInfo.style.display = 'none';
+
+        isListening = true;
+        isRecording = false;
+    } else {
+        statusText.textContent = 'Inactif';
+        btnListen.innerHTML = '<span class="icon">📡</span> Écouter Art-Net';
+        btnRecord.disabled = true;
+        btnRecord.innerHTML = '<span class="icon">⏺</span> Enregistrer';
+        btnRecord.classList.remove('recording');
+        recordingInfo.style.display = 'none';
+
+        isListening = false;
+        isRecording = false;
+    }
+
+    // Status details
+    let details = [];
+    if (data.frames_received) {
+        details.push(`${data.frames_received} frames reçues`);
+    }
+    if (data.last_frame_age_ms !== null && data.last_frame_age_ms < 5000) {
+        details.push('Signal Art-Net détecté');
+    }
+    statusDetails.textContent = details.join(' • ');
+}
+
+// Toggle listening
+async function toggleListening() {
+    try {
+        if (isListening) {
+            await fetch('/api/dmx-recorder/listen/stop', { method: 'POST' });
+        } else {
+            await fetch('/api/dmx-recorder/listen/start', { method: 'POST' });
+        }
+        refreshStatus();
+    } catch (error) {
+        console.error('Listen toggle error:', error);
+        alert('Erreur: ' + error.message);
+    }
+}
+
+// Toggle recording
+async function toggleRecording() {
+    try {
+        if (isRecording) {
+            const response = await fetch('/api/dmx-recorder/record/stop', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ save: true })
+            });
+            const data = await response.json();
+
+            if (data.success) {
+                alert(`Enregistrement sauvegardé!\n${data.data.frame_count} frames, ${formatTime(data.data.duration_ms)}`);
+                refreshRecordings();
+            }
+        } else {
+            const name = document.getElementById('record-name').value || 'Enregistrement ' + new Date().toLocaleString();
+            const universe = parseInt(document.getElementById('record-universe').value) || 0;
+
+            await fetch('/api/dmx-recorder/record/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, universe })
+            });
+        }
+        refreshStatus();
+    } catch (error) {
+        console.error('Record toggle error:', error);
+        alert('Erreur: ' + error.message);
+    }
+}
+
+// Load scenes for sync dropdown
+async function loadScenes() {
+    try {
+        const response = await fetch('/api/scenes');
+        const data = await response.json();
+
+        scenes = data.scenes || [];
+
+        const select = document.getElementById('sync-scene-select');
+        select.innerHTML = '<option value="">-- Sélectionner une scène --</option>';
+
+        scenes.forEach(scene => {
+            const option = document.createElement('option');
+            option.value = scene.id;
+            option.textContent = scene.name;
+            select.appendChild(option);
+        });
+    } catch (error) {
+        console.error('Load scenes error:', error);
+    }
+}
+
+// Load scene-recording links
+async function loadSceneLinks() {
+    try {
+        const response = await fetch('/api/dmx-links');
+        const data = await response.json();
+
+        sceneLinks = {};
+        (data.links || []).forEach(link => {
+            sceneLinks[link.scene_id] = link;
+        });
+
+        // Refresh recordings to show link badges
+        refreshRecordings();
+    } catch (error) {
+        console.error('Load scene links error:', error);
+    }
+}
+
+// Find scenes linked to a recording
+function getScenesLinkedToRecording(recordingName) {
+    return Object.values(sceneLinks).filter(link => link.recording_name === recordingName);
+}
+
+// Refresh recordings list
+async function refreshRecordings() {
+    try {
+        const response = await fetch('/api/dmx-recorder/recordings');
+        const data = await response.json();
+
+        const container = document.getElementById('recordings-list');
+
+        if (!data.recordings || data.recordings.length === 0) {
+            container.innerHTML = '<div class="no-recordings">Aucun enregistrement</div>';
+            return;
+        }
+
+        container.innerHTML = data.recordings.map(rec => {
+            // Check if this recording is linked to any scene
+            const linkedScenes = getScenesLinkedToRecording(rec.name);
+            const linkBadge = linkedScenes.length > 0
+                ? `<span class="recording-link-badge">🔗 ${linkedScenes.length} scène${linkedScenes.length > 1 ? 's' : ''}</span>`
+                : '';
+
+            return `
+                <div class="recording-item" onclick="editRecording('${rec.name}')">
+                    <div class="recording-item-header">
+                        <div>
+                            <div class="recording-name">${rec.name}${linkBadge}</div>
+                            <div class="recording-meta">
+                                <span>⏱ ${formatTime(rec.trimmed_duration_ms || rec.duration_ms)}</span>
+                                <span>🎬 ${rec.frame_count} frames</span>
+                                <span>🌐 Universe ${rec.universe}</span>
+                            </div>
+                        </div>
+                        <div class="recording-actions" onclick="event.stopPropagation()">
+                            <button class="btn-icon" onclick="playRecording('${rec.name}')" title="Jouer">▶</button>
+                            <button class="btn-icon" onclick="editRecording('${rec.name}')" title="Éditer">✏️</button>
+                            <button class="btn-icon" onclick="deleteRecording('${rec.name}')" title="Supprimer">🗑️</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    } catch (error) {
+        console.error('Refresh recordings error:', error);
+    }
+}
+
+// Play recording
+async function playRecording(name) {
+    try {
+        await fetch(`/api/dmx-recorder/recordings/${encodeURIComponent(name)}/play`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ loop: false })
+        });
+    } catch (error) {
+        console.error('Play error:', error);
+        alert('Erreur de lecture: ' + error.message);
+    }
+}
+
+// Delete recording
+async function deleteRecording(name) {
+    if (!confirm(`Supprimer l'enregistrement "${name}" ?`)) return;
+
+    try {
+        await fetch(`/api/dmx-recorder/recordings/${encodeURIComponent(name)}`, {
+            method: 'DELETE'
+        });
+        refreshRecordings();
+    } catch (error) {
+        console.error('Delete error:', error);
+        alert('Erreur de suppression: ' + error.message);
+    }
+}
+
+// Edit recording (open modal)
+async function editRecording(name) {
+    try {
+        const response = await fetch(`/api/dmx-recorder/recordings/${encodeURIComponent(name)}`);
+        const data = await response.json();
+
+        currentEditRecording = data;
+
+        // Populate editor
+        document.getElementById('editor-title').textContent = data.name;
+        document.getElementById('trim-start-input').value = data.trim_start_ms;
+        document.getElementById('trim-end-input').value = data.trim_end_ms;
+        document.getElementById('trim-start-input').max = data.duration_ms;
+        document.getElementById('trim-end-input').max = data.duration_ms;
+
+        updateTrimDisplay();
+        updateTimelineMarkers(data.duration_ms);
+
+        // Check for existing links to this recording
+        updateLinkStatusInEditor(name);
+
+        // Show modal
+        document.getElementById('editor-modal').style.display = 'flex';
+
+        // Setup trim handles
+        setupTrimHandles();
+    } catch (error) {
+        console.error('Edit error:', error);
+        alert('Erreur: ' + error.message);
+    }
+}
+
+// Update link status display in editor
+function updateLinkStatusInEditor(recordingName) {
+    const linkedScenes = getScenesLinkedToRecording(recordingName);
+    const linkStatus = document.getElementById('link-status');
+    const linkInfo = linkStatus.querySelector('.link-info');
+    const btnUnlink = document.getElementById('btn-unlink');
+    const sceneSelect = document.getElementById('sync-scene-select');
+    const modeSelect = document.getElementById('sync-mode-select');
+    const offsetInput = document.getElementById('sync-offset');
+
+    if (linkedScenes.length > 0) {
+        // Show link status
+        const sceneNames = linkedScenes.map(link => {
+            const scene = scenes.find(s => s.id === link.scene_id);
+            return scene ? scene.name : link.scene_id;
+        }).join(', ');
+
+        linkInfo.textContent = `Lié à: ${sceneNames}`;
+        linkStatus.style.display = 'flex';
+        btnUnlink.style.display = 'inline-flex';
+
+        // Pre-select the first linked scene and its mode
+        const firstLink = linkedScenes[0];
+        sceneSelect.value = firstLink.scene_id;
+        modeSelect.value = firstLink.mode || 'recording_priority';
+        offsetInput.value = firstLink.offset_ms || 0;
+    } else {
+        linkStatus.style.display = 'none';
+        btnUnlink.style.display = 'none';
+        sceneSelect.value = '';
+        modeSelect.value = 'recording_priority';
+        offsetInput.value = 0;
+    }
+}
+
+function closeEditor() {
+    document.getElementById('editor-modal').style.display = 'none';
+    currentEditRecording = null;
+}
+
+function updateTrimDisplay() {
+    if (!currentEditRecording) return;
+
+    const startMs = parseInt(document.getElementById('trim-start-input').value) || 0;
+    const endMs = parseInt(document.getElementById('trim-end-input').value) || currentEditRecording.duration_ms;
+    const duration = endMs - startMs;
+
+    document.getElementById('trim-start-display').textContent = formatTime(startMs);
+    document.getElementById('trim-end-display').textContent = formatTime(endMs);
+    document.getElementById('trimmed-duration').textContent = formatTime(duration);
+
+    // Update timeline handles
+    const track = document.getElementById('timeline-track');
+    const startHandle = document.getElementById('trim-start-handle');
+    const endHandle = document.getElementById('trim-end-handle');
+
+    const startPercent = (startMs / currentEditRecording.duration_ms) * 100;
+    const endPercent = (endMs / currentEditRecording.duration_ms) * 100;
+
+    startHandle.style.left = `${startPercent}%`;
+    endHandle.style.left = `calc(${endPercent}% - 8px)`;
+}
+
+function updateTrimFromInput() {
+    updateTrimDisplay();
+}
+
+function updateTimelineMarkers(durationMs) {
+    document.getElementById('timeline-mid').textContent = formatTime(durationMs / 2);
+    document.getElementById('timeline-end').textContent = formatTime(durationMs);
+    document.getElementById('timeline-duration').textContent = `Durée totale: ${formatTime(durationMs)}`;
+}
+
+function setupTrimHandles() {
+    const track = document.getElementById('timeline-track');
+    const startHandle = document.getElementById('trim-start-handle');
+    const endHandle = document.getElementById('trim-end-handle');
+
+    let dragging = null;
+
+    function onMouseDown(e, handle) {
+        dragging = handle;
+        e.preventDefault();
+    }
+
+    function onMouseMove(e) {
+        if (!dragging || !currentEditRecording) return;
+
+        const rect = track.getBoundingClientRect();
+        const percent = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+        const ms = Math.round(percent * currentEditRecording.duration_ms);
+
+        if (dragging === 'start') {
+            const endMs = parseInt(document.getElementById('trim-end-input').value);
+            if (ms < endMs) {
+                document.getElementById('trim-start-input').value = ms;
+            }
+        } else {
+            const startMs = parseInt(document.getElementById('trim-start-input').value);
+            if (ms > startMs) {
+                document.getElementById('trim-end-input').value = ms;
+            }
+        }
+
+        updateTrimDisplay();
+    }
+
+    function onMouseUp() {
+        dragging = null;
+    }
+
+    startHandle.addEventListener('mousedown', (e) => onMouseDown(e, 'start'));
+    endHandle.addEventListener('mousedown', (e) => onMouseDown(e, 'end'));
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+}
+
+async function saveRecording() {
+    if (!currentEditRecording) return;
+
+    const startMs = parseInt(document.getElementById('trim-start-input').value);
+    const endMs = parseInt(document.getElementById('trim-end-input').value);
+
+    try {
+        await fetch(`/api/dmx-recorder/recordings/${encodeURIComponent(currentEditRecording.name)}/trim`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                trim_start_ms: startMs,
+                trim_end_ms: endMs
+            })
+        });
+
+        closeEditor();
+        refreshRecordings();
+    } catch (error) {
+        console.error('Save error:', error);
+        alert('Erreur de sauvegarde: ' + error.message);
+    }
+}
+
+async function previewRecording() {
+    if (!currentEditRecording) return;
+
+    try {
+        await fetch(`/api/dmx-recorder/recordings/${encodeURIComponent(currentEditRecording.name)}/play`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ loop: false })
+        });
+
+        // Show playhead animation
+        const playhead = document.getElementById('playhead');
+        playhead.style.display = 'block';
+
+        const startMs = parseInt(document.getElementById('trim-start-input').value);
+        const endMs = parseInt(document.getElementById('trim-end-input').value);
+        const duration = endMs - startMs;
+
+        playhead.style.transition = `left ${duration}ms linear`;
+        playhead.style.left = `${(startMs / currentEditRecording.duration_ms) * 100}%`;
+
+        setTimeout(() => {
+            playhead.style.left = `${(endMs / currentEditRecording.duration_ms) * 100}%`;
+        }, 50);
+
+        setTimeout(() => {
+            playhead.style.display = 'none';
+            playhead.style.transition = 'none';
+            playhead.style.left = '0';
+        }, duration + 100);
+
+    } catch (error) {
+        console.error('Preview error:', error);
+    }
+}
+
+async function stopPreview() {
+    try {
+        await fetch('/api/dmx-recorder/playback/stop', { method: 'POST' });
+        document.getElementById('playhead').style.display = 'none';
+    } catch (error) {
+        console.error('Stop preview error:', error);
+    }
+}
+
+async function linkToScene() {
+    const sceneId = document.getElementById('sync-scene-select').value;
+    const mode = document.getElementById('sync-mode-select').value;
+    const offsetMs = parseInt(document.getElementById('sync-offset').value) || 0;
+
+    if (!sceneId || !currentEditRecording) {
+        alert('Sélectionnez une scène');
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/dmx-links', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                scene_id: sceneId,
+                recording_name: currentEditRecording.name,
+                mode: mode,
+                offset_ms: offsetMs
+            })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            // Find scene name for feedback
+            const scene = scenes.find(s => s.id === sceneId);
+            const sceneName = scene ? scene.name : sceneId;
+
+            alert(`Enregistrement "${currentEditRecording.name}" lié à la scène "${sceneName}"`);
+
+            // Refresh links and update UI
+            await loadSceneLinks();
+            updateLinkStatusInEditor(currentEditRecording.name);
+        } else {
+            alert('Erreur: ' + (data.error || 'Échec de la liaison'));
+        }
+    } catch (error) {
+        console.error('Link to scene error:', error);
+        alert('Erreur: ' + error.message);
+    }
+}
+
+async function unlinkFromScene() {
+    const sceneId = document.getElementById('sync-scene-select').value;
+
+    if (!sceneId || !currentEditRecording) {
+        alert('Sélectionnez une scène à délier');
+        return;
+    }
+
+    // Find the link for this scene
+    const link = sceneLinks[sceneId];
+    if (!link || link.recording_name !== currentEditRecording.name) {
+        alert('Cette scène n\'est pas liée à cet enregistrement');
+        return;
+    }
+
+    if (!confirm(`Délier l'enregistrement de la scène ?`)) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/dmx-links/${encodeURIComponent(sceneId)}`, {
+            method: 'DELETE'
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            alert('Liaison supprimée');
+
+            // Refresh links and update UI
+            await loadSceneLinks();
+            updateLinkStatusInEditor(currentEditRecording.name);
+        } else {
+            alert('Erreur: ' + (data.error || 'Échec de la suppression'));
+        }
+    } catch (error) {
+        console.error('Unlink error:', error);
+        alert('Erreur: ' + error.message);
+    }
+}
+</script>
+{% endblock %}

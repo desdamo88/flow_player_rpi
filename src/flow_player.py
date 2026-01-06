@@ -12,6 +12,7 @@ from .core.utils import get_device_id, get_hostname, get_ip_address, get_mac_add
 from .core.project_loader import ProjectLoader, Project, Scene
 from .core.scene_player import ScenePlayer, SceneState
 from .core.scheduler import PlaybackScheduler, Schedule, ScheduleMode
+from .core.dmx_scene_link import DMXSceneLinkManager
 from .players.dmx_player import DMXPlayer
 from .players.video_player import VideoPlayer, VideoMapping
 
@@ -45,6 +46,11 @@ class FlowPlayer:
         self._active_show_id: Optional[str] = None
         self._loop_count = 0
 
+        # DMX recording support
+        self.dmx_recorder = None  # Initialized on demand via API
+        self.dmx_recording_player = None  # Initialized on demand via API
+        self.dmx_link_manager: Optional[DMXSceneLinkManager] = None
+
         # Monitoring
         self._heartbeat_thread: Optional[threading.Thread] = None
         self._heartbeat_running = False
@@ -73,6 +79,10 @@ class FlowPlayer:
                     self.dmx_player.initialize()
                 except Exception as e:
                     logger.warning(f"DMX player init failed: {e}")
+
+            # Initialize DMX link manager
+            self.dmx_link_manager = DMXSceneLinkManager(self.config.config_path)
+            logger.info("DMX scene link manager initialized")
 
             # Initialize scheduler
             self.scheduler.set_on_trigger(self._on_schedule_trigger)
@@ -170,6 +180,11 @@ class FlowPlayer:
         self._scene_player = ScenePlayer(self.current_project, scene)
         self._scene_player.set_video_player(self.video_player)
         self._scene_player.set_dmx_player(self.dmx_player)
+
+        # Set DMX link manager for recording playback support
+        if self.dmx_link_manager:
+            recordings_path = self.config.shows_path / "_recordings"
+            self._scene_player.set_dmx_link_manager(self.dmx_link_manager, recordings_path)
 
         # Set up callbacks
         self._scene_player.set_on_complete(self._on_playback_complete)
@@ -310,12 +325,23 @@ class FlowPlayer:
             if scene_mapping:
                 mapping_info = scene_mapping.to_dict()
 
+            # Check for linked DMX recording
+            dmx_recording_link = None
+            has_dmx_recording = False
+            if self.dmx_link_manager:
+                link = self.dmx_link_manager.get_link(scene.id)
+                if link and link.enabled:
+                    has_dmx_recording = True
+                    dmx_recording_link = link.to_dict()
+
             scenes.append({
                 "id": scene.id,
                 "name": scene.name,
                 "duration_ms": scene.duration_ms,
                 "has_dmx": has_dmx,
                 "dmx_sequence_name": dmx_seq.name if dmx_seq else None,
+                "has_dmx_recording": has_dmx_recording,
+                "dmx_recording_link": dmx_recording_link,
                 "element_count": len(scene.elements),
                 "video_count": video_count,
                 "audio_count": audio_count,
